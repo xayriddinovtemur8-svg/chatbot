@@ -1,7 +1,9 @@
 import os
 import requests
-import fitz  # pymupdf
+import fitz
+import json
 from groq import Groq
+from tavily import TavilyClient
 from dotenv import load_dotenv
 from telegram import Update, BotCommand
 from telegram.ext import (
@@ -16,16 +18,27 @@ from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from docx import Document
 from docx.shared import Pt as DocPt, RGBColor as DocRGB
-import json
 
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 client = Groq(api_key=GROQ_API_KEY)
+tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 user_histories = {}
+
+SEARCH_KEYWORDS = [
+    "today", "now", "current", "latest", "news", "price", "rate", "weather",
+    "bugun", "hozir", "narx", "kurs", "yangilik", "ob-havo", "oxirgi",
+    "сегодня", "сейчас", "курс", "цена", "новости"
+]
+
+def needs_search(text):
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in SEARCH_KEYWORDS)
 
 def create_pptx(title, slides_data):
     prs = Presentation()
@@ -118,10 +131,13 @@ Create at least 4 sections. Use the same language as the topic."""
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Hello! I am your AI assistant 🤖\n\n"
-        "📊 /pptx — Create PowerPoint presentation\n"
-        "📝 /word — Create Word document\n"
+        "💬 Chat with me\n"
+        "🌐 Ask about current news, prices, weather\n"
+        "📄 Send a PDF to analyze\n"
+        "🖼️ Send an image\n"
         "🎤 Send a voice message\n"
-        "🖼️ Send an image\n\n"
+        "📊 /pptx — Create PowerPoint\n"
+        "📝 /word — Create Word document\n\n"
         "/help — Help\n"
         "/reset — Clear chat history"
     )
@@ -134,7 +150,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/word [topic] — Create Word document\n"
         "  Example: /word business plan\n\n"
         "/reset — Clear chat history\n"
-        "/help — Help"
+        "/help — Help\n\n"
+        "🌐 Ask anything current:\n"
+        "  'dollar rate today'\n"
+        "  'latest news'\n"
+        "  'weather in Tashkent'"
     )
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -220,10 +240,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         ]
 
-    user_histories[user_id].append({"role": "user", "content": user_text})
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
+        if needs_search(user_text):
+            search_results = tavily.search(query=user_text, max_results=3)
+            search_content = "\n\n".join([
+                f"Source: {r['url']}\n{r['content']}"
+                for r in search_results.get("results", [])
+            ])
+            message_content = (
+                f"User question: {user_text}\n\n"
+                f"Web search results:\n{search_content}\n\n"
+                f"Based on these results, give a clear and accurate answer."
+            )
+        else:
+            message_content = user_text
+
+        user_histories[user_id].append({"role": "user", "content": message_content})
+
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=user_histories[user_id]
@@ -231,6 +266,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
+
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -300,6 +336,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
@@ -357,6 +394,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
+
 async def post_init(app):
     await app.bot.set_my_commands([
         BotCommand("start", "Start the bot"),
