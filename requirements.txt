@@ -4,3 +4,4 @@ python-dotenv
 python-pptx
 python-docx
 pymupdf
+requests
