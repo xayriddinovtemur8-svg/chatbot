@@ -2,6 +2,7 @@ import os
 import requests
 import fitz
 import json
+import sqlite3
 from groq import Groq
 from tavily import TavilyClient
 from dotenv import load_dotenv
@@ -35,6 +36,77 @@ SEARCH_KEYWORDS = [
     "bugun", "hozir", "narx", "kurs", "yangilik", "ob-havo", "oxirgi",
     "сегодня", "сейчас", "курс", "цена", "новости"
 ]
+
+# ===== DATABASE =====
+def init_db():
+    conn = sqlite3.connect("memory.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_memory (
+            user_id INTEGER PRIMARY KEY,
+            name TEXT,
+            facts TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def get_memory(user_id):
+    conn = sqlite3.connect("memory.db")
+    c = conn.cursor()
+    c.execute("SELECT name, facts FROM user_memory WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"name": row[0], "facts": row[1]}
+    return None
+
+def save_memory(user_id, name, facts):
+    conn = sqlite3.connect("memory.db")
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO user_memory (user_id, name, facts)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET name=?, facts=?
+    """, (user_id, name, facts, name, facts))
+    conn.commit()
+    conn.close()
+
+async def update_memory(user_id, user_text, reply):
+    memory = get_memory(user_id)
+    current_facts = memory["facts"] if memory else ""
+    current_name = memory["name"] if memory else ""
+
+    prompt = f"""
+Based on this conversation, extract and update user information.
+Current known facts: {current_facts}
+Current name: {current_name}
+
+New conversation:
+User: {user_text}
+Assistant: {reply}
+
+Extract:
+1. User's name (if mentioned)
+2. Important facts about user (interests, job, location, preferences, etc.)
+
+Reply ONLY in JSON:
+{{"name": "user name or empty string", "facts": "updated facts as a short summary"}}
+"""
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        content = response.choices[0].message.content.strip()
+        if "```" in content:
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        data = json.loads(content)
+        save_memory(user_id, data.get("name", current_name), data.get("facts", current_facts))
+    except:
+        pass
 
 def needs_search(text):
     text_lower = text.lower()
@@ -226,6 +298,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
 
+    memory = get_memory(user_id)
+    memory_context = ""
+    if memory and (memory["name"] or memory["facts"]):
+        memory_context = f"\nUser info: name={memory['name']}, facts={memory['facts']}\n"
+
     if user_id not in user_histories:
         user_histories[user_id] = [
             {
@@ -235,7 +312,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Always reply in the same language the user writes in. "
                     "Keep answers short, clear and natural. "
                     "Never add unnecessary information about yourself. "
-                    "If there is no question, do not add extra information."
+                    f"{memory_context}"
                 )
             }
         ]
@@ -266,6 +343,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
+
+        await update_memory(user_id, user_text, reply)
 
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
@@ -396,6 +475,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def post_init(app):
+    init_db()
     await app.bot.set_my_commands([
         BotCommand("start", "Start the bot"),
         BotCommand("pptx", "Create PowerPoint"),
