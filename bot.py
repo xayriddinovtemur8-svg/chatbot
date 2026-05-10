@@ -2,7 +2,7 @@ import os
 import requests
 import fitz
 import json
-import sqlite3
+import psycopg2
 from groq import Groq
 from tavily import TavilyClient
 from dotenv import load_dotenv
@@ -25,6 +25,7 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 client = Groq(api_key=GROQ_API_KEY)
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
@@ -38,12 +39,15 @@ SEARCH_KEYWORDS = [
 ]
 
 # ===== DATABASE =====
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
+
 def init_db():
-    conn = sqlite3.connect("memory.db")
+    conn = get_conn()
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS user_memory (
-            user_id INTEGER PRIMARY KEY,
+            user_id BIGINT PRIMARY KEY,
             name TEXT,
             facts TEXT
         )
@@ -52,25 +56,31 @@ def init_db():
     conn.close()
 
 def get_memory(user_id):
-    conn = sqlite3.connect("memory.db")
-    c = conn.cursor()
-    c.execute("SELECT name, facts FROM user_memory WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return {"name": row[0], "facts": row[1]}
-    return None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT name, facts FROM user_memory WHERE user_id = %s", (user_id,))
+        row = c.fetchone()
+        conn.close()
+        if row:
+            return {"name": row[0], "facts": row[1]}
+        return None
+    except:
+        return None
 
 def save_memory(user_id, name, facts):
-    conn = sqlite3.connect("memory.db")
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO user_memory (user_id, name, facts)
-        VALUES (?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET name=?, facts=?
-    """, (user_id, name, facts, name, facts))
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO user_memory (user_id, name, facts)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET name=%s, facts=%s
+        """, (user_id, name, facts, name, facts))
+        conn.commit()
+        conn.close()
+    except:
+        pass
 
 async def update_memory(user_id, user_text, reply):
     memory = get_memory(user_id)
@@ -301,7 +311,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memory = get_memory(user_id)
     memory_context = ""
     if memory and (memory["name"] or memory["facts"]):
-        memory_context = f"\nUser info: name={memory['name']}, facts={memory['facts']}\n"
+        memory_context = f"User info — name: {memory['name']}, facts: {memory['facts']}. "
 
     if user_id not in user_histories:
         user_histories[user_id] = [
@@ -312,7 +322,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Always reply in the same language the user writes in. "
                     "Keep answers short, clear and natural. "
                     "Never add unnecessary information about yourself. "
-                    f"{memory_context}"
+                    + memory_context
                 )
             }
         ]
