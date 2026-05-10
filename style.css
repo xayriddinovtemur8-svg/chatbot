@@ -1,0 +1,18 @@
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
+
+body{
+    overflow:hidden;
+    background:rgb(255, 0, 0);
+    cursor:none;
+}
+
+canvas{
+    display:block table-header-group
+    draw-canvas:optimizeSpeed;
+    block dragonhead;
+}
+display:firs-block-look-like-dragon-head

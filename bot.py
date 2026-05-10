@@ -1,10 +1,9 @@
 import os
-import re
-import subprocess
 import requests
+import fitz  # pymupdf
 from groq import Groq
 from dotenv import load_dotenv
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
@@ -16,7 +15,8 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from docx import Document
-from docx.shared import Pt as DocPt
+from docx.shared import Pt as DocPt, RGBColor as DocRGB
+import json
 
 load_dotenv()
 
@@ -27,300 +27,195 @@ client = Groq(api_key=GROQ_API_KEY)
 
 user_histories = {}
 
+def create_pptx(title, slides_data):
+    prs = Presentation()
+    prs.slide_width = Inches(13.33)
+    prs.slide_height = Inches(7.5)
+
+    slide_layout = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(slide_layout)
+    slide.background.fill.solid()
+    slide.background.fill.fore_color.rgb = RGBColor(0x1E, 0x1E, 0x2E)
+
+    title_box = slide.shapes.title
+    title_box.text = title
+    title_box.text_frame.paragraphs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    title_box.text_frame.paragraphs[0].font.size = Pt(40)
+    title_box.text_frame.paragraphs[0].font.bold = True
+
+    for s in slides_data:
+        sl = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(sl)
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = RGBColor(0x1E, 0x1E, 0x2E)
+
+        t = slide.shapes.title
+        t.text = s["title"]
+        t.text_frame.paragraphs[0].font.color.rgb = RGBColor(0x89, 0xB4, 0xFA)
+        t.text_frame.paragraphs[0].font.size = Pt(28)
+        t.text_frame.paragraphs[0].font.bold = True
+
+        body = slide.placeholders[1]
+        tf = body.text_frame
+        tf.clear()
+        for i, point in enumerate(s["points"]):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = f"• {point}"
+            p.font.color.rgb = RGBColor(0xCD, 0xD6, 0xF4)
+            p.font.size = Pt(18)
+
+    path = "presentation.pptx"
+    prs.save(path)
+    return path
+
+def create_docx(title, sections):
+    doc = Document()
+    h = doc.add_heading(title, 0)
+    h.runs[0].font.color.rgb = DocRGB(0x1E, 0x3A, 0x8A)
+
+    for section in sections:
+        doc.add_heading(section["title"], level=1)
+        for point in section["points"]:
+            doc.add_paragraph(point, style="List Bullet")
+        doc.add_paragraph()
+
+    path = "document.docx"
+    doc.save(path)
+    return path
+
+async def generate_content(topic, doc_type):
+    if doc_type == "pptx":
+        prompt = f"""
+Create presentation content for the topic: '{topic}'.
+Reply ONLY in JSON format, nothing else:
+{{
+  "title": "Presentation title",
+  "slides": [
+    {{"title": "Slide title", "points": ["point 1", "point 2", "point 3"]}},
+    {{"title": "Slide title", "points": ["point 1", "point 2", "point 3"]}}
+  ]
+}}
+Create at least 5 slides. Use the same language as the topic."""
+    else:
+        prompt = f"""
+Create Word document content for the topic: '{topic}'.
+Reply ONLY in JSON format, nothing else:
+{{
+  "title": "Document title",
+  "sections": [
+    {{"title": "Section title", "points": ["sentence 1", "sentence 2", "sentence 3"]}},
+    {{"title": "Section title", "points": ["sentence 1", "sentence 2", "sentence 3"]}}
+  ]
+}}
+Create at least 4 sections. Use the same language as the topic."""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Salom! Men AI yordamchiman 🤖\n\n"
-        "📝 Matn yozing — AI javob beradi\n"
-        "🎤 Ovozli xabar — AI tinglab javob beradi\n"
-        "🖼️ Rasm yuboring — AI tasvirlab beradi\n"
-        "🎵 Video yuboring — Audio ajratib beradi\n"
-        "⬇️ YouTube/Instagram link — Video yuklab beradi\n"
-        "📊 Prezentatsiya — 'prezentatsiya yasa: mavzu' yozing\n"
-        "📄 Word hujjat — 'word yasa: mavzu' yozing\n"
-        "🔍 Kanal qidirish — 'kanal top: mavzu' yozing\n\n"
-        "/help — yordam\n"
-        "/reset — suhbatni tozalash"
+        "Hello! I am your AI assistant 🤖\n\n"
+        "📊 /pptx — Create PowerPoint presentation\n"
+        "📝 /word — Create Word document\n"
+        "🎤 Send a voice message\n"
+        "🖼️ Send an image\n\n"
+        "/help — Help\n"
+        "/reset — Clear chat history"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📌 Buyruqlar:\n\n"
-        "/start — Botni boshlash\n"
-        "/help — Yordam\n\n"
-        "📊 Prezentatsiya yasash:\n"
-        "  'prezentatsiya yasa: quyosh haqida'\n\n"
-        "📄 Word hujjat yasash:\n"
-        "  'word yasa: rezyume'\n\n"
-        "🔍 Kanal qidirish:\n"
-        "  'kanal top: dasturlash'\n"
-        "  'kanal top: musiqa'\n\n"
-        "⬇️ Video yuklab olish:\n"
-        "  YouTube yoki Instagram havolasini yuboring\n\n"
-        "🎵 Audio ajratish:\n"
-        "  Video fayl yuboring"
+        "📌 Commands:\n\n"
+        "/pptx [topic] — Create PowerPoint\n"
+        "  Example: /pptx artificial intelligence\n\n"
+        "/word [topic] — Create Word document\n"
+        "  Example: /word business plan\n\n"
+        "/reset — Clear chat history\n"
+        "/help — Help"
     )
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_histories[user_id] = []
-    await update.message.reply_text("Suhbat tarixi tozalandi ✅")
+    await update.message.reply_text("Chat history cleared ✅")
 
-def create_pptx(topic, slides_data):
-    prs = Presentation()
-    prs.slide_width = Inches(13.33)
-    prs.slide_height = Inches(7.5)
+async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    topic = " ".join(context.args)
+    if not topic:
+        await update.message.reply_text("Please provide a topic!\nExample: /pptx artificial intelligence")
+        return
 
-    DARK_BG = RGBColor(18, 18, 40)
-    ACCENT = RGBColor(99, 102, 241)
-    WHITE = RGBColor(255, 255, 255)
-    LIGHT_GRAY = RGBColor(200, 200, 220)
-
-    for i, slide_info in enumerate(slides_data):
-        slide_layout = prs.slide_layouts[6]
-        slide = prs.slides.add_slide(slide_layout)
-
-        bg = slide.background
-        fill = bg.fill
-        fill.solid()
-        fill.fore_color.rgb = DARK_BG
-
-        line = slide.shapes.add_shape(1, Inches(0), Inches(0), Inches(13.33), Inches(0.08))
-        line.fill.solid()
-        line.fill.fore_color.rgb = ACCENT
-        line.line.fill.background()
-
-        if i == 0:
-            title_box = slide.shapes.add_textbox(Inches(1), Inches(2.5), Inches(11), Inches(1.5))
-            tf = title_box.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
-            p.text = slide_info.get("title", topic)
-            p.font.size = Pt(44)
-            p.font.bold = True
-            p.font.color.rgb = WHITE
-
-            sub_box = slide.shapes.add_textbox(Inches(1), Inches(4.2), Inches(11), Inches(1))
-            tf2 = sub_box.text_frame
-            p2 = tf2.paragraphs[0]
-            p2.text = slide_info.get("content", "")
-            p2.font.size = Pt(22)
-            p2.font.color.rgb = ACCENT
-        else:
-            title_box = slide.shapes.add_textbox(Inches(0.6), Inches(0.3), Inches(11), Inches(1))
-            tf = title_box.text_frame
-            p = tf.paragraphs[0]
-            p.text = slide_info.get("title", "")
-            p.font.size = Pt(32)
-            p.font.bold = True
-            p.font.color.rgb = ACCENT
-
-            content = slide_info.get("content", "")
-            lines = content.split("\n")
-            content_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.5), Inches(11.5), Inches(5.5))
-            tf2 = content_box.text_frame
-            tf2.word_wrap = True
-
-            for j, line in enumerate(lines):
-                if line.strip():
-                    p2 = tf2.paragraphs[0] if j == 0 else tf2.add_paragraph()
-                    p2.text = f"• {line.strip()}" if not line.startswith("•") else line
-                    p2.font.size = Pt(20)
-                    p2.font.color.rgb = LIGHT_GRAY
-                    p2.space_after = Pt(8)
-
-        num_box = slide.shapes.add_textbox(Inches(12.5), Inches(7.1), Inches(0.7), Inches(0.3))
-        tf_n = num_box.text_frame
-        p_n = tf_n.paragraphs[0]
-        p_n.text = str(i + 1)
-        p_n.font.size = Pt(12)
-        p_n.font.color.rgb = LIGHT_GRAY
-
-    filename = "prezentatsiya.pptx"
-    prs.save(filename)
-    return filename
-
-def create_docx(topic, content):
-    doc = Document()
-    title = doc.add_heading(topic, 0)
-    title.runs[0].font.color.rgb = RGBColor(99, 102, 241)
-    doc.add_paragraph("")
-
-    lines = content.split("\n")
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("##"):
-            doc.add_heading(line.replace("##", "").strip(), level=2)
-        elif line.startswith("#"):
-            doc.add_heading(line.replace("#", "").strip(), level=1)
-        elif line.startswith("•") or line.startswith("-") or line.startswith("*"):
-            doc.add_paragraph(line.lstrip("•-* "), style="List Bullet")
-        else:
-            doc.add_paragraph(line)
-
-    filename = "hujjat.docx"
-    doc.save(filename)
-    return filename
-
-async def find_channel(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
-    await update.message.reply_text(f"🔍 '{query}' bo'yicha kanallar qidirilmoqda...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
-    prompt = f"""Telegram da '{query}' mavzusidagi mashhur va foydali kanallarni top.
-Faqat JSON formatida javob ber, boshqa hech narsa yozma:
-[
-  {{
-    "name": "Kanal nomi",
-    "username": "@kanalUsername",
-    "description": "Kanal haqida qisqa ma'lumot",
-    "link": "https://t.me/kanalUsername"
-  }}
-]
-5 ta kanal top. Haqiqiy va mavjud kanallarni yoz."""
+    await update.message.reply_text(f"⏳ Creating presentation on '{topic}'...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
 
     try:
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        raw = resp.choices[0].message.content
-        raw = re.sub(r"```json|```", "", raw).strip()
-        import json
-        channels = json.loads(raw)
+        content_str = await generate_content(topic, "pptx")
+        content_str = content_str.strip()
+        if "```" in content_str:
+            content_str = content_str.split("```")[1]
+            if content_str.startswith("json"):
+                content_str = content_str[4:]
+        content = json.loads(content_str)
 
-        msg = f"📡 '{query}' bo'yicha kanallar:\n\n"
-        keyboard = []
-
-        for i, ch in enumerate(channels, 1):
-            name = ch.get("name", "Noma'lum")
-            desc = ch.get("description", "")
-            link = ch.get("link", "")
-            username = ch.get("username", "")
-            msg += f"{i}. **{name}** {username}\n📝 {desc}\n\n"
-            if link:
-                keyboard.append([InlineKeyboardButton(f"📢 {name}", url=link)])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
+        path = create_pptx(content["title"], content["slides"])
+        with open(path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename=f"{topic}.pptx",
+                caption=f"✅ Presentation on '{topic}' is ready!"
+            )
+        os.remove(path)
 
     except Exception as e:
-        await update.message.reply_text(f"Xatolik yuz berdi: {str(e)}")
+        await update.message.reply_text(f"Error: {str(e)}")
 
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    topic = " ".join(context.args)
+    if not topic:
+        await update.message.reply_text("Please provide a topic!\nExample: /word business plan")
+        return
+
+    await update.message.reply_text(f"⏳ Creating document on '{topic}'...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
+
     try:
-        video = update.message.video or update.message.document
-        file = await context.bot.get_file(video.file_id)
-        video_data = requests.get(file.file_path).content
-        with open("video.mp4", "wb") as f:
-            f.write(video_data)
+        content_str = await generate_content(topic, "docx")
+        content_str = content_str.strip()
+        if "```" in content_str:
+            content_str = content_str.split("```")[1]
+            if content_str.startswith("json"):
+                content_str = content_str[4:]
+        content = json.loads(content_str)
 
-        await update.message.reply_text("🎵 Audio ajratilmoqda...")
-
-        subprocess.run([
-            'ffmpeg', '-i', 'video.mp4', '-q:a', '0', '-map', 'a', 'audio.mp3', '-y'
-        ])
-
-        with open("audio.mp3", "rb") as f:
-            await update.message.reply_audio(f, filename="audio.mp3", caption="🎵 Audio tayyor!")
+        path = create_docx(content["title"], content["sections"])
+        with open(path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename=f"{topic}.docx",
+                caption=f"✅ Document on '{topic}' is ready!"
+            )
+        os.remove(path)
 
     except Exception as e:
-        await update.message.reply_text(f"Xatolik: {str(e)}")
-
-async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text.strip()
-
-    instagram_patterns = ["instagram.com/reel", "instagram.com/p/"]
-    youtube_patterns = ["youtube.com", "youtu.be"]
-
-    if any(p in user_text for p in instagram_patterns + youtube_patterns):
-        await update.message.reply_text("⬇️ Video yuklanmoqda...")
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
-        try:
-            import yt_dlp
-            ydl_opts = {
-                'outtmpl': 'downloaded.%(ext)s',
-                'format': 'best[ext=mp4]/best',
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(user_text, download=True)
-                filename = ydl.prepare_filename(info)
-
-            with open(filename, "rb") as f:
-                await update.message.reply_video(f, caption="✅ Video tayyor!")
-
-        except Exception as e:
-            await update.message.reply_text(f"Xatolik: {str(e)}")
-    else:
-        await handle_message(update, context)
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_text = update.message.text.strip()
-
-    pptx_triggers = ["prezentatsiya yasa", "prezentatsiya qil", "slayd yasa", "pptx yasa"]
-    docx_triggers = ["word yasa", "word qil", "hujjat yasa", "docx yasa", "rezyume yasa"]
-    kanal_triggers = ["kanal top", "kanal qidir", "kanal izla", "kanal tap"]
-
-    if any(user_text.lower().startswith(t) for t in pptx_triggers):
-        topic = re.split(r"[:—\-]", user_text, 1)[-1].strip() or user_text
-        await update.message.reply_text(f"📊 '{topic}' bo'yicha prezentatsiya tayyorlanmoqda...")
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
-        prompt = f"""'{topic}' mavzusida 6 ta slayd uchun kontent yarat.
-Faqat JSON formatida javob ber:
-[
-  {{"title": "Sarlavha slayd", "content": "Qisqa tavsif"}},
-  {{"title": "Slayd 2 nomi", "content": "- nuqta 1\\n- nuqta 2\\n- nuqta 3"}}
-]"""
-        try:
-            resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            raw = resp.choices[0].message.content
-            raw = re.sub(r"```json|```", "", raw).strip()
-            import json
-            slides_data = json.loads(raw)
-            filename = create_pptx(topic, slides_data)
-            with open(filename, "rb") as f:
-                await update.message.reply_document(f, filename=filename, caption=f"📊 '{topic}' prezentatsiyasi tayyor!")
-        except Exception as e:
-            await update.message.reply_text(f"Xatolik: {str(e)}")
-        return
-
-    if any(user_text.lower().startswith(t) for t in docx_triggers):
-        topic = re.split(r"[:—\-]", user_text, 1)[-1].strip() or user_text
-        await update.message.reply_text(f"📄 '{topic}' bo'yicha hujjat tayyorlanmoqda...")
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
-        prompt = f"""'{topic}' mavzusida to'liq va professional hujjat yoz.
-Sarlavhalar uchun # va ## ishlat. Ro'yxatlar uchun - ishlat. O'zbek tilida yoz."""
-        try:
-            resp = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            content = resp.choices[0].message.content
-            filename = create_docx(topic, content)
-            with open(filename, "rb") as f:
-                await update.message.reply_document(f, filename=filename, caption=f"📄 '{topic}' hujjati tayyor!")
-        except Exception as e:
-            await update.message.reply_text(f"Xatolik: {str(e)}")
-        return
-
-    if any(user_text.lower().startswith(t) for t in kanal_triggers):
-        query = re.split(r"[:—\-]", user_text, 1)[-1].strip() or user_text
-        await find_channel(update, context, query)
-        return
+    user_text = update.message.text
 
     if user_id not in user_histories:
         user_histories[user_id] = [
             {
                 "role": "system",
                 "content": (
-                    "Sen foydali yordamchi botsan. O'zbek tilida javob ber. "
-                    "Agar foydalanuvchi biror ilova, dastur yoki vosita haqida so'rasa, "
-                    "uning rasmiy havolasini ham yubor."
+                    "You are a professional AI assistant. "
+                    "Always reply in the same language the user writes in. "
+                    "Keep answers short, clear and natural. "
+                    "Never add unnecessary information about yourself. "
+                    "If there is no question, do not add extra information."
                 )
             }
         ]
@@ -337,27 +232,40 @@ Sarlavhalar uchun # va ## ishlat. Ro'yxatlar uchun - ishlat. O'zbek tilida yoz."
         user_histories[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
     except Exception as e:
-        await update.message.reply_text(f"Xatolik yuz berdi: {str(e)}")
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
     try:
         voice = update.message.voice
         file = await context.bot.get_file(voice.file_id)
         audio_data = requests.get(file.file_path).content
         with open("voice.ogg", "wb") as f:
             f.write(audio_data)
+
         with open("voice.ogg", "rb") as f:
             transcription = client.audio.transcriptions.create(
                 file=("voice.ogg", f.read()),
                 model="whisper-large-v3",
             )
+
         user_text = transcription.text
-        await update.message.reply_text(f"🎤 Siz dedingiz: {user_text}")
+        await update.message.reply_text(f"🎤 You said: {user_text}")
 
         if user_id not in user_histories:
-            user_histories[user_id] = [{"role": "system", "content": "Sen foydali yordamchi botsan. O'zbek tilida javob ber."}]
+            user_histories[user_id] = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a professional AI assistant. "
+                        "Always reply in the same language the user writes in. "
+                        "Keep answers short, clear and natural."
+                    )
+                }
+            ]
+
         user_histories[user_id].append({"role": "user", "content": user_text})
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -366,15 +274,18 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
+
     except Exception as e:
-        await update.message.reply_text(f"Xatolik yuz berdi: {str(e)}")
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
     try:
         photo = update.message.photo[-1]
         file = await context.bot.get_file(photo.file_id)
-        caption = update.message.caption or "Bu rasmda nima bor?"
+        caption = update.message.caption or "What is in this image?"
+
         response = client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[{
@@ -386,14 +297,73 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }]
         )
         await update.message.reply_text(response.choices[0].message.content)
-    except Exception as e:
-        await update.message.reply_text(f"Xatolik yuz berdi: {str(e)}")
 
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    try:
+        doc = update.message.document
+        if not doc.file_name.endswith(".pdf"):
+            await update.message.reply_text("Please send a PDF file! 📄")
+            return
+
+        await update.message.reply_text("⏳ Reading PDF...")
+
+        file = await context.bot.get_file(doc.file_id)
+        pdf_data = requests.get(file.file_path).content
+
+        with open("temp.pdf", "wb") as f:
+            f.write(pdf_data)
+
+        pdf = fitz.open("temp.pdf")
+        text = ""
+        for page in pdf:
+            text += page.get_text()
+        pdf.close()
+        os.remove("temp.pdf")
+
+        if len(text) > 12000:
+            text = text[:12000] + "..."
+
+        user_id = update.effective_user.id
+        caption = update.message.caption or "Summarize this document and explain the key points."
+
+        if user_id not in user_histories:
+            user_histories[user_id] = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a professional AI assistant. "
+                        "Always reply in the same language the user writes in. "
+                        "Keep answers short, clear and natural."
+                    )
+                }
+            ]
+
+        user_histories[user_id].append({
+            "role": "user",
+            "content": f"PDF content:\n\n{text}\n\nUser request: {caption}"
+        })
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=user_histories[user_id]
+        )
+        reply = response.choices[0].message.content
+        user_histories[user_id].append({"role": "assistant", "content": reply})
+        await update.message.reply_text(reply)
+
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
 async def post_init(app):
     await app.bot.set_my_commands([
-        BotCommand("start", "Botni boshlash"),
-        BotCommand("reset", "Suhbatni tozalash"),
-        BotCommand("help", "Yordam"),
+        BotCommand("start", "Start the bot"),
+        BotCommand("pptx", "Create PowerPoint"),
+        BotCommand("word", "Create Word document"),
+        BotCommand("reset", "Clear chat history"),
+        BotCommand("help", "Help"),
     ])
 
 def main():
@@ -401,11 +371,13 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+    app.add_handler(CommandHandler("pptx", pptx_command))
+    app.add_handler(CommandHandler("word", word_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_image))
-    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
-    print("Bot ishlamoqda... ✅")
+    app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+    print("Bot is running... ✅")
     app.run_polling()
 
 if __name__ == "__main__":

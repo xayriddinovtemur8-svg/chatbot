@@ -1,7 +1,6 @@
 python-telegram-bot
 groq
 python-dotenv
-requests
 python-pptx
 python-docx
-yt-dlp
+pymupdf
