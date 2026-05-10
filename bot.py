@@ -2,6 +2,7 @@ import os
 import requests
 import fitz
 import json
+import aiosqlite
 from groq import Groq
 from tavily import TavilyClient
 from dotenv import load_dotenv
@@ -29,7 +30,62 @@ client = Groq(api_key=GROQ_API_KEY)
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 user_histories = {}
+DB_PATH = "memory.db"
 
+# ===== DATABASE =====
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_memory (
+                user_id INTEGER PRIMARY KEY,
+                name TEXT,
+                language TEXT,
+                facts TEXT
+            )
+        """)
+        await db.commit()
+
+async def get_memory(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT name, language, facts FROM user_memory WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {"name": row[0], "language": row[1], "facts": row[2] or ""}
+            return None
+
+async def save_memory(user_id, name=None, language=None, facts=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        existing = await get_memory(user_id)
+        if existing:
+            await db.execute("""
+                UPDATE user_memory SET
+                    name = COALESCE(?, name),
+                    language = COALESCE(?, language),
+                    facts = COALESCE(?, facts)
+                WHERE user_id = ?
+            """, (name, language, facts, user_id))
+        else:
+            await db.execute("""
+                INSERT INTO user_memory (user_id, name, language, facts)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, name, language, facts or ""))
+        await db.commit()
+
+async def update_facts(user_id, new_fact):
+    memory = await get_memory(user_id)
+    if memory:
+        existing_facts = memory.get("facts", "") or ""
+        facts_list = [f for f in existing_facts.split("|") if f]
+        facts_list.append(new_fact)
+        if len(facts_list) > 20:
+            facts_list = facts_list[-20:]
+        await save_memory(user_id, facts="|".join(facts_list))
+    else:
+        await save_memory(user_id, facts=new_fact)
+
+# ===== SEARCH =====
 SEARCH_KEYWORDS = [
     "today", "now", "current", "latest", "news", "price", "rate", "weather",
     "bugun", "hozir", "narx", "kurs", "yangilik", "ob-havo", "oxirgi",
@@ -40,6 +96,7 @@ def needs_search(text):
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in SEARCH_KEYWORDS)
 
+# ===== POWERPOINT =====
 def create_pptx(title, slides_data):
     prs = Presentation()
     prs.slide_width = Inches(13.33)
@@ -81,6 +138,7 @@ def create_pptx(title, slides_data):
     prs.save(path)
     return path
 
+# ===== WORD =====
 def create_docx(title, sections):
     doc = Document()
     h = doc.add_heading(title, 0)
@@ -96,6 +154,7 @@ def create_docx(title, sections):
     doc.save(path)
     return path
 
+# ===== CONTENT GENERATOR =====
 async def generate_content(topic, doc_type):
     if doc_type == "pptx":
         prompt = f"""
@@ -128,9 +187,18 @@ Create at least 4 sections. Use the same language as the topic."""
     )
     return response.choices[0].message.content
 
+# ===== HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    memory = await get_memory(user.id)
+    if memory and memory.get("name"):
+        greeting = f"Welcome back, {memory['name']}! 👋"
+    else:
+        greeting = "Hello! I am your AI assistant 🤖"
+        await save_memory(user.id, name=user.first_name)
+
     await update.message.reply_text(
-        "Hello! I am your AI assistant 🤖\n\n"
+        f"{greeting}\n\n"
         "💬 Chat with me\n"
         "🌐 Ask about current news, prices, weather\n"
         "📄 Send a PDF to analyze\n"
@@ -160,7 +228,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_histories[user_id] = []
-    await update.message.reply_text("Chat history cleared ✅")
+    await update.message.reply_text("Chat history cleared ✅\nYour profile is saved 💾")
 
 async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = " ".join(context.args)
@@ -188,7 +256,6 @@ async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=f"✅ Presentation on '{topic}' is ready!"
             )
         os.remove(path)
-
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -218,13 +285,25 @@ async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=f"✅ Document on '{topic}' is ready!"
             )
         os.remove(path)
-
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
+
+    memory = await get_memory(user_id)
+    if not memory:
+        await save_memory(user_id, name=update.effective_user.first_name)
+        memory = await get_memory(user_id)
+
+    memory_context = ""
+    if memory:
+        if memory.get("name"):
+            memory_context += f"User's name: {memory['name']}. "
+        if memory.get("facts"):
+            facts = memory["facts"].replace("|", ", ")
+            memory_context += f"Known facts about user: {facts}. "
 
     if user_id not in user_histories:
         user_histories[user_id] = [
@@ -235,7 +314,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Always reply in the same language the user writes in. "
                     "Keep answers short, clear and natural. "
                     "Never add unnecessary information about yourself. "
-                    "If there is no question, do not add extra information."
+                    + (f"\n\nUser memory: {memory_context}" if memory_context else "")
                 )
             }
         ]
@@ -265,6 +344,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
+
+        # Extract and save new facts
+        if any(word in user_text.lower() for word in ["my name is", "i am", "i like", "i work", "men", "mening", "я", "меня зовут"]):
+            await update_facts(user_id, user_text[:100])
+
         await update.message.reply_text(reply)
 
     except Exception as e:
@@ -396,6 +480,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def post_init(app):
+    await init_db()
     await app.bot.set_my_commands([
         BotCommand("start", "Start the bot"),
         BotCommand("pptx", "Create PowerPoint"),

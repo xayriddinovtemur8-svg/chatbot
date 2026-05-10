@@ -6,3 +6,4 @@ python-docx
 pymupdf
 requests
 tavily-python
+aiosqlite
