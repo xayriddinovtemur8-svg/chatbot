@@ -228,8 +228,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_histories[user_id] = []
-    await update.message.reply_text("Chat history cleared ✅\nYour profile is saved 💾")
-
+    await update.message.reply_text(
+        "Chat history cleared ✅\nYour profile is saved 💾\n\n"
+        "Hello! I am your AI assistant 🤖\n\n"
+        "💬 Chat with me\n"
+        "🌐 Ask about current news, prices, weather\n"
+        "📄 Send a PDF to analyze\n"
+        "🖼️ Send an image\n"
+        "🎤 Send a voice message\n"
+        "📊 /pptx — Create PowerPoint\n"
+        "📝 /word — Create Word document\n\n"
+        "/help — Help"
+    )
 async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = " ".join(context.args)
     if not topic:
