@@ -38,7 +38,6 @@ SEARCH_KEYWORDS = [
     "сегодня", "сейчас", "курс", "цена", "новости"
 ]
 
-# ===== DATABASE =====
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
@@ -96,10 +95,6 @@ New conversation:
 User: {user_text}
 Assistant: {reply}
 
-Extract:
-1. User's name (if mentioned)
-2. Important facts about user (interests, job, location, preferences, etc.)
-
 Reply ONLY in JSON:
 {{"name": "user name or empty string", "facts": "updated facts as a short summary"}}
 """
@@ -119,8 +114,7 @@ Reply ONLY in JSON:
         pass
 
 def needs_search(text):
-    text_lower = text.lower()
-    return any(keyword in text_lower for keyword in SEARCH_KEYWORDS)
+    return any(k in text.lower() for k in SEARCH_KEYWORDS)
 
 def create_pptx(title, slides_data):
     prs = Presentation()
@@ -131,7 +125,6 @@ def create_pptx(title, slides_data):
     slide = prs.slides.add_slide(slide_layout)
     slide.background.fill.solid()
     slide.background.fill.fore_color.rgb = RGBColor(0x1E, 0x1E, 0x2E)
-
     title_box = slide.shapes.title
     title_box.text = title
     title_box.text_frame.paragraphs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
@@ -143,13 +136,11 @@ def create_pptx(title, slides_data):
         slide = prs.slides.add_slide(sl)
         slide.background.fill.solid()
         slide.background.fill.fore_color.rgb = RGBColor(0x1E, 0x1E, 0x2E)
-
         t = slide.shapes.title
         t.text = s["title"]
         t.text_frame.paragraphs[0].font.color.rgb = RGBColor(0x89, 0xB4, 0xFA)
         t.text_frame.paragraphs[0].font.size = Pt(28)
         t.text_frame.paragraphs[0].font.bold = True
-
         body = slide.placeholders[1]
         tf = body.text_frame
         tf.clear()
@@ -167,43 +158,34 @@ def create_docx(title, sections):
     doc = Document()
     h = doc.add_heading(title, 0)
     h.runs[0].font.color.rgb = DocRGB(0x1E, 0x3A, 0x8A)
-
     for section in sections:
         doc.add_heading(section["title"], level=1)
         for point in section["points"]:
             doc.add_paragraph(point, style="List Bullet")
         doc.add_paragraph()
-
     path = "document.docx"
     doc.save(path)
     return path
 
 async def generate_content(topic, doc_type):
     if doc_type == "pptx":
-        prompt = f"""
-Create presentation content for the topic: '{topic}'.
-Reply ONLY in JSON format, nothing else:
-{{
-  "title": "Presentation title",
-  "slides": [
-    {{"title": "Slide title", "points": ["point 1", "point 2", "point 3"]}},
-    {{"title": "Slide title", "points": ["point 1", "point 2", "point 3"]}}
-  ]
-}}
-Create at least 5 slides. Use the same language as the topic."""
+        prompt = f"""Create presentation content for: '{topic}'.
+Reply ONLY in JSON:
+{{"title": "title", "slides": [{{"title": "s1", "points": ["p1","p2","p3"]}}]}}
+At least 5 slides. Same language as topic."""
     else:
-        prompt = f"""
-Create Word document content for the topic: '{topic}'.
-Reply ONLY in JSON format, nothing else:
-{{
-  "title": "Document title",
-  "sections": [
-    {{"title": "Section title", "points": ["sentence 1", "sentence 2", "sentence 3"]}},
-    {{"title": "Section title", "points": ["sentence 1", "sentence 2", "sentence 3"]}}
-  ]
-}}
-Create at least 4 sections. Use the same language as the topic."""
+        prompt = f"""Create Word document content for: '{topic}'.
+Reply ONLY in JSON:
+{{"title": "title", "sections": [{{"title": "s1", "points": ["p1","p2","p3"]}}]}}
+At least 4 sections. Same language as topic."""
 
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
+
+async def ai_generate(prompt):
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}]
@@ -214,29 +196,36 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Hello! I am your AI assistant 🤖\n\n"
         "💬 Chat with me\n"
-        "🌐 Ask about current news, prices, weather\n"
-        "📄 Send a PDF to analyze\n"
-        "🖼️ Send an image\n"
-        "🎤 Send a voice message\n"
-        "📊 /pptx — Create PowerPoint\n"
-        "📝 /word — Create Word document\n\n"
+        "🌐 Current news, prices, weather\n"
+        "📄 Send PDF to analyze\n"
+        "🖼️ Send image\n"
+        "🎤 Send voice message\n\n"
+        "📊 /pptx — PowerPoint\n"
+        "📝 /word — Word document\n"
+        "👤 /cv — Write CV/Resume\n"
+        "📧 /email — Write email\n"
+        "📱 /post — Marketing post\n"
+        "💼 /biznes — Business plan\n\n"
         "/help — Help\n"
-        "/reset — Clear chat history"
+        "/reset — Clear history"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📌 Commands:\n\n"
-        "/pptx [topic] — Create PowerPoint\n"
-        "  Example: /pptx artificial intelligence\n\n"
-        "/word [topic] — Create Word document\n"
-        "  Example: /word business plan\n\n"
+        "/pptx [topic] — PowerPoint\n"
+        "/word [topic] — Word document\n"
+        "/cv [your info] — CV/Resume\n"
+        "/email [topic] — Professional email\n"
+        "/post [topic] — Marketing post\n"
+        "/biznes [idea] — Business plan\n"
         "/reset — Clear chat history\n"
         "/help — Help\n\n"
-        "🌐 Ask anything current:\n"
-        "  'dollar rate today'\n"
-        "  'latest news'\n"
-        "  'weather in Tashkent'"
+        "Examples:\n"
+        "/cv Python developer, 3 years experience\n"
+        "/email follow up after interview\n"
+        "/post new coffee shop opening\n"
+        "/biznes online clothing store"
     )
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -247,12 +236,10 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = " ".join(context.args)
     if not topic:
-        await update.message.reply_text("Please provide a topic!\nExample: /pptx artificial intelligence")
+        await update.message.reply_text("Example: /pptx artificial intelligence")
         return
-
     await update.message.reply_text(f"⏳ Creating presentation on '{topic}'...")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
-
     try:
         content_str = await generate_content(topic, "pptx")
         content_str = content_str.strip()
@@ -261,28 +248,20 @@ async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if content_str.startswith("json"):
                 content_str = content_str[4:]
         content = json.loads(content_str)
-
         path = create_pptx(content["title"], content["slides"])
         with open(path, "rb") as f:
-            await update.message.reply_document(
-                document=f,
-                filename=f"{topic}.pptx",
-                caption=f"✅ Presentation on '{topic}' is ready!"
-            )
+            await update.message.reply_document(document=f, filename=f"{topic}.pptx", caption=f"✅ Ready!")
         os.remove(path)
-
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     topic = " ".join(context.args)
     if not topic:
-        await update.message.reply_text("Please provide a topic!\nExample: /word business plan")
+        await update.message.reply_text("Example: /word business plan")
         return
-
     await update.message.reply_text(f"⏳ Creating document on '{topic}'...")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
-
     try:
         content_str = await generate_content(topic, "docx")
         content_str = content_str.strip()
@@ -291,16 +270,75 @@ async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if content_str.startswith("json"):
                 content_str = content_str[4:]
         content = json.loads(content_str)
-
         path = create_docx(content["title"], content["sections"])
         with open(path, "rb") as f:
-            await update.message.reply_document(
-                document=f,
-                filename=f"{topic}.docx",
-                caption=f"✅ Document on '{topic}' is ready!"
-            )
+            await update.message.reply_document(document=f, filename=f"{topic}.docx", caption=f"✅ Ready!")
         os.remove(path)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
 
+async def cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    info = " ".join(context.args)
+    if not info:
+        await update.message.reply_text("Example: /cv Python developer, 3 years experience, Tashkent")
+        return
+    await update.message.reply_text("⏳ Writing your CV...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        prompt = f"""Write a professional CV/Resume for: {info}
+Format it nicely with sections: Summary, Experience, Skills, Education.
+Make it ATS-friendly and professional."""
+        reply = await ai_generate(prompt)
+        await update.message.reply_text(f"✅ Your CV:\n\n{reply}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    topic = " ".join(context.args)
+    if not topic:
+        await update.message.reply_text("Example: /email follow up after job interview")
+        return
+    await update.message.reply_text("⏳ Writing email...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        prompt = f"""Write a professional email about: {topic}
+Include: Subject line, greeting, body, closing.
+Make it professional and concise."""
+        reply = await ai_generate(prompt)
+        await update.message.reply_text(f"✅ Your email:\n\n{reply}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    topic = " ".join(context.args)
+    if not topic:
+        await update.message.reply_text("Example: /post new coffee shop opening in Tashkent")
+        return
+    await update.message.reply_text("⏳ Writing marketing post...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        prompt = f"""Write an engaging social media marketing post about: {topic}
+Include: Hook, main content, call to action, relevant hashtags.
+Make it catchy and professional."""
+        reply = await ai_generate(prompt)
+        await update.message.reply_text(f"✅ Your post:\n\n{reply}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def biznes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    idea = " ".join(context.args)
+    if not idea:
+        await update.message.reply_text("Example: /biznes online clothing store")
+        return
+    await update.message.reply_text("⏳ Writing business plan...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        prompt = f"""Write a detailed business plan for: {idea}
+Include: Executive Summary, Market Analysis, Products/Services, 
+Marketing Strategy, Financial Plan, Operations.
+Make it professional and realistic."""
+        reply = await ai_generate(prompt)
+        await update.message.reply_text(f"✅ Business plan:\n\n{reply}")
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -345,7 +383,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_content = user_text
 
         user_histories[user_id].append({"role": "user", "content": message_content})
-
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=user_histories[user_id]
@@ -353,7 +390,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
-
         await update_memory(user_id, user_text, reply)
 
     except Exception as e:
@@ -362,34 +398,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
     try:
         voice = update.message.voice
         file = await context.bot.get_file(voice.file_id)
         audio_data = requests.get(file.file_path).content
         with open("voice.ogg", "wb") as f:
             f.write(audio_data)
-
         with open("voice.ogg", "rb") as f:
             transcription = client.audio.transcriptions.create(
                 file=("voice.ogg", f.read()),
                 model="whisper-large-v3",
             )
-
         user_text = transcription.text
         await update.message.reply_text(f"🎤 You said: {user_text}")
 
         if user_id not in user_histories:
-            user_histories[user_id] = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a professional AI assistant. "
-                        "Always reply in the same language the user writes in. "
-                        "Keep answers short, clear and natural."
-                    )
-                }
-            ]
+            user_histories[user_id] = [{"role": "system", "content": "You are a professional AI assistant. Always reply in the same language the user writes in."}]
 
         user_histories[user_id].append({"role": "user", "content": user_text})
         response = client.chat.completions.create(
@@ -399,80 +423,51 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
-
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
     try:
         photo = update.message.photo[-1]
         file = await context.bot.get_file(photo.file_id)
         caption = update.message.caption or "What is in this image?"
-
         response = client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": file.file_path}},
-                    {"type": "text", "text": caption}
-                ]
-            }]
+            messages=[{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": file.file_path}},
+                {"type": "text", "text": caption}
+            ]}]
         )
         await update.message.reply_text(response.choices[0].message.content)
-
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
     try:
         doc = update.message.document
         if not doc.file_name.endswith(".pdf"):
             await update.message.reply_text("Please send a PDF file! 📄")
             return
-
         await update.message.reply_text("⏳ Reading PDF...")
-
         file = await context.bot.get_file(doc.file_id)
         pdf_data = requests.get(file.file_path).content
-
         with open("temp.pdf", "wb") as f:
             f.write(pdf_data)
-
         pdf = fitz.open("temp.pdf")
         text = ""
         for page in pdf:
             text += page.get_text()
         pdf.close()
         os.remove("temp.pdf")
-
         if len(text) > 12000:
             text = text[:12000] + "..."
-
         user_id = update.effective_user.id
         caption = update.message.caption or "Summarize this document and explain the key points."
-
         if user_id not in user_histories:
-            user_histories[user_id] = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a professional AI assistant. "
-                        "Always reply in the same language the user writes in. "
-                        "Keep answers short, clear and natural."
-                    )
-                }
-            ]
-
-        user_histories[user_id].append({
-            "role": "user",
-            "content": f"PDF content:\n\n{text}\n\nUser request: {caption}"
-        })
-
+            user_histories[user_id] = [{"role": "system", "content": "You are a professional AI assistant. Always reply in the same language the user writes in."}]
+        user_histories[user_id].append({"role": "user", "content": f"PDF content:\n\n{text}\n\nUser request: {caption}"})
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=user_histories[user_id]
@@ -480,7 +475,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
-
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -490,6 +484,10 @@ async def post_init(app):
         BotCommand("start", "Start the bot"),
         BotCommand("pptx", "Create PowerPoint"),
         BotCommand("word", "Create Word document"),
+        BotCommand("cv", "Write CV/Resume"),
+        BotCommand("email", "Write professional email"),
+        BotCommand("post", "Write marketing post"),
+        BotCommand("biznes", "Write business plan"),
         BotCommand("reset", "Clear chat history"),
         BotCommand("help", "Help"),
     ])
@@ -501,6 +499,10 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("pptx", pptx_command))
     app.add_handler(CommandHandler("word", word_command))
+    app.add_handler(CommandHandler("cv", cv_command))
+    app.add_handler(CommandHandler("email", email_command))
+    app.add_handler(CommandHandler("post", post_command))
+    app.add_handler(CommandHandler("biznes", biznes_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_image))
