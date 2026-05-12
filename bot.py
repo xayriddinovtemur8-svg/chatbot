@@ -3,14 +3,16 @@ import requests
 import fitz
 import json
 import psycopg2
+from datetime import datetime, timedelta
 from groq import Groq
 from tavily import TavilyClient
 from dotenv import load_dotenv
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
     CommandHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes
 )
@@ -27,6 +29,13 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+ADMIN_ID = 8230883785
+CARD_NUMBER = "4916990345412073"
+ADMIN_USERNAME = "@temur_uzb7779"
+
+STANDARD_PRICE = 5
+PREMIUM_PRICE = 10
+
 client = Groq(api_key=GROQ_API_KEY)
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
@@ -38,6 +47,7 @@ SEARCH_KEYWORDS = [
     "сегодня", "сейчас", "курс", "цена", "новости"
 ]
 
+# ===== DATABASE =====
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
@@ -51,8 +61,80 @@ def init_db():
             facts TEXT
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            user_id BIGINT PRIMARY KEY,
+            plan TEXT DEFAULT 'free',
+            expires_at TIMESTAMP,
+            usage_count INTEGER DEFAULT 0,
+            last_reset DATE DEFAULT CURRENT_DATE
+        )
+    """)
     conn.commit()
     conn.close()
+
+def get_subscription(user_id):
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT plan, expires_at, usage_count, last_reset FROM subscriptions WHERE user_id = %s", (user_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return {"plan": "free", "expires_at": None, "usage_count": 0}
+        plan, expires_at, usage_count, last_reset = row
+        if expires_at and datetime.now() > expires_at:
+            set_plan(user_id, "free", None)
+            return {"plan": "free", "expires_at": None, "usage_count": 0}
+        return {"plan": plan, "expires_at": expires_at, "usage_count": usage_count, "last_reset": last_reset}
+    except:
+        return {"plan": "free", "expires_at": None, "usage_count": 0}
+
+def set_plan(user_id, plan, days=30):
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        expires_at = datetime.now() + timedelta(days=days) if days else None
+        c.execute("""
+            INSERT INTO subscriptions (user_id, plan, expires_at, usage_count, last_reset)
+            VALUES (%s, %s, %s, 0, CURRENT_DATE)
+            ON CONFLICT (user_id) DO UPDATE SET plan=%s, expires_at=%s, usage_count=0
+        """, (user_id, plan, expires_at, plan, expires_at))
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
+def check_and_increment_usage(user_id, limit):
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT usage_count, last_reset FROM subscriptions WHERE user_id = %s", (user_id,))
+        row = c.fetchone()
+        today = datetime.now().date()
+
+        if not row:
+            c.execute("INSERT INTO subscriptions (user_id, plan, usage_count, last_reset) VALUES (%s, 'free', 1, %s)", (user_id, today))
+            conn.commit()
+            conn.close()
+            return True
+
+        usage_count, last_reset = row
+        if last_reset < today:
+            usage_count = 0
+            c.execute("UPDATE subscriptions SET usage_count=0, last_reset=%s WHERE user_id=%s", (today, user_id))
+            conn.commit()
+
+        if limit != -1 and usage_count >= limit:
+            conn.close()
+            return False
+
+        c.execute("UPDATE subscriptions SET usage_count = usage_count + 1 WHERE user_id = %s", (user_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except:
+        return True
 
 def get_memory(user_id):
     try:
@@ -85,16 +167,12 @@ async def update_memory(user_id, user_text, reply):
     memory = get_memory(user_id)
     current_facts = memory["facts"] if memory else ""
     current_name = memory["name"] if memory else ""
-
     prompt = f"""
 Based on this conversation, extract and update user information.
 Current known facts: {current_facts}
 Current name: {current_name}
-
-New conversation:
 User: {user_text}
 Assistant: {reply}
-
 Reply ONLY in JSON:
 {{"name": "user name or empty string", "facts": "updated facts as a short summary"}}
 """
@@ -116,11 +194,27 @@ Reply ONLY in JSON:
 def needs_search(text):
     return any(k in text.lower() for k in SEARCH_KEYWORDS)
 
+def get_plan_limits(plan, feature):
+    limits = {
+        "free": {
+            "chat": 20, "search": 20, "image": 20, "post": 20, "biznes": 20,
+            "pdf": 0, "cv": 0, "email": 0, "voice": 0, "pptx": 0, "word": 0
+        },
+        "standard": {
+            "chat": 30, "search": 30, "image": 30, "post": 30, "biznes": 30,
+            "pdf": 30, "cv": 30, "email": 30, "voice": 0, "pptx": 0, "word": 0
+        },
+        "premium": {
+            "chat": -1, "search": -1, "image": -1, "post": -1, "biznes": -1,
+            "pdf": -1, "cv": -1, "email": -1, "voice": -1, "pptx": -1, "word": -1
+        }
+    }
+    return limits.get(plan, limits["free"]).get(feature, 0)
+
 def create_pptx(title, slides_data):
     prs = Presentation()
     prs.slide_width = Inches(13.33)
     prs.slide_height = Inches(7.5)
-
     slide_layout = prs.slide_layouts[0]
     slide = prs.slides.add_slide(slide_layout)
     slide.background.fill.solid()
@@ -130,7 +224,6 @@ def create_pptx(title, slides_data):
     title_box.text_frame.paragraphs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
     title_box.text_frame.paragraphs[0].font.size = Pt(40)
     title_box.text_frame.paragraphs[0].font.bold = True
-
     for s in slides_data:
         sl = prs.slide_layouts[1]
         slide = prs.slides.add_slide(sl)
@@ -149,7 +242,6 @@ def create_pptx(title, slides_data):
             p.text = f"• {point}"
             p.font.color.rgb = RGBColor(0xCD, 0xD6, 0xF4)
             p.font.size = Pt(18)
-
     path = "presentation.pptx"
     prs.save(path)
     return path
@@ -178,7 +270,6 @@ At least 5 slides. Same language as topic."""
 Reply ONLY in JSON:
 {{"title": "title", "sections": [{{"title": "s1", "points": ["p1","p2","p3"]}}]}}
 At least 4 sections. Same language as topic."""
-
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}]
@@ -192,9 +283,14 @@ async def ai_generate(prompt):
     )
     return response.choices[0].message.content
 
+# ===== COMMANDS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    plan = sub["plan"].upper()
     await update.message.reply_text(
-        "Hello! I am your AI assistant 🤖\n\n"
+        f"Hello! I am your AI assistant 🤖\n"
+        f"Your plan: {plan}\n\n"
         "💬 Chat with me\n"
         "🌐 Current news, prices, weather\n"
         "📄 Send PDF to analyze\n"
@@ -202,30 +298,201 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎤 Send voice message\n\n"
         "📊 /pptx — PowerPoint\n"
         "📝 /word — Word document\n"
-        "👤 /cv — Write CV/Resume\n"
+        "👤 /cv — Write CV\n"
         "📧 /email — Write email\n"
         "📱 /post — Marketing post\n"
         "💼 /biznes — Business plan\n\n"
+        "💰 /pricing — Plans & pricing\n"
+        "👤 /myplan — My current plan\n"
         "/help — Help\n"
         "/reset — Clear history"
     )
 
+async def pricing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🆓 Free — Current", callback_data="plan_info_free")],
+        [InlineKeyboardButton(f"⭐ Standard — {STANDARD_PRICE} USDT/month", callback_data="plan_buy_standard")],
+        [InlineKeyboardButton(f"💎 Premium — {PREMIUM_PRICE} USDT/month", callback_data="plan_buy_premium")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "💰 Plans & Pricing:\n\n"
+        "🆓 FREE — Free\n"
+        "• Chat: 20/day\n"
+        "• Internet search: 20/day\n"
+        "• Image analysis: 20/day\n"
+        "• Marketing post: 20/day\n"
+        "• Business plan: 20/day\n"
+        "• Memory: Unlimited\n\n"
+        f"⭐ STANDARD — {STANDARD_PRICE} USDT/month\n"
+        "• Everything in Free: 30/day\n"
+        "• PDF analysis: 30/day\n"
+        "• CV writing: 30/day\n"
+        "• Email writing: 30/day\n"
+        "• Memory: Unlimited\n\n"
+        f"💎 PREMIUM — {PREMIUM_PRICE} USDT/month\n"
+        "• Everything unlimited\n"
+        "• Voice messages\n"
+        "• PowerPoint creation\n"
+        "• Word documents\n"
+        "• Priority support\n",
+        reply_markup=reply_markup
+    )
+
+async def myplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    plan = sub["plan"].upper()
+    expires = sub["expires_at"].strftime("%d.%m.%Y") if sub.get("expires_at") else "—"
+    await update.message.reply_text(
+        f"👤 Your plan: {plan}\n"
+        f"📅 Expires: {expires}\n\n"
+        "Use /pricing to upgrade!"
+    )
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if query.data == "plan_buy_standard":
+        await query.message.reply_text(
+            f"⭐ STANDARD plan — {STANDARD_PRICE} USDT/month\n\n"
+            f"💳 Pay to card: `{CARD_NUMBER}`\n"
+            f"💵 Amount: {STANDARD_PRICE} USDT equivalent\n\n"
+            f"After payment, send screenshot to {ADMIN_USERNAME}\n"
+            f"Your ID: `{user_id}`\n\n"
+            "Admin will activate your plan within 1 hour! ✅",
+            parse_mode="Markdown"
+        )
+    elif query.data == "plan_buy_premium":
+        await query.message.reply_text(
+            f"💎 PREMIUM plan — {PREMIUM_PRICE} USDT/month\n\n"
+            f"💳 Pay to card: `{CARD_NUMBER}`\n"
+            f"💵 Amount: {PREMIUM_PRICE} USDT equivalent\n\n"
+            f"After payment, send screenshot to {ADMIN_USERNAME}\n"
+            f"Your ID: `{user_id}`\n\n"
+            "Admin will activate your plan within 1 hour! ✅",
+            parse_mode="Markdown"
+        )
+
+# ===== ADMIN COMMANDS =====
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!")
+        return
+
+    await update.message.reply_text(
+        "🔧 Admin Panel\n\n"
+        "/setplan [user_id] [plan] — Set user plan\n"
+        "  Plans: free, standard, premium\n"
+        "  Example: /setplan 123456789 premium\n\n"
+        "/users — Show all subscribers\n"
+        "/broadcast [message] — Send message to all users"
+    )
+
+async def setplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /setplan [user_id] [plan]\nExample: /setplan 123456789 premium")
+        return
+
+    target_id = int(context.args[0])
+    plan = context.args[1].lower()
+
+    if plan not in ["free", "standard", "premium"]:
+        await update.message.reply_text("❌ Plan must be: free, standard, or premium")
+        return
+
+    days = 30 if plan != "free" else None
+    set_plan(target_id, plan, days)
+
+    await update.message.reply_text(f"✅ User {target_id} plan set to {plan.upper()}!")
+
+    try:
+        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=f"{plan_emoji[plan]} Your plan has been upgraded to {plan.upper()}! Thank you! 🎉\n\nUse /myplan to see details."
+        )
+    except:
+        pass
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!")
+        return
+
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT user_id, plan, expires_at FROM subscriptions WHERE plan != 'free' ORDER BY plan")
+        rows = c.fetchall()
+        conn.close()
+
+        if not rows:
+            await update.message.reply_text("No paid subscribers yet.")
+            return
+
+        text = "👥 Paid subscribers:\n\n"
+        for row in rows:
+            uid, plan, expires = row
+            expires_str = expires.strftime("%d.%m.%Y") if expires else "—"
+            text += f"ID: {uid} | {plan.upper()} | until {expires_str}\n"
+
+        await update.message.reply_text(text)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!")
+        return
+
+    message = " ".join(context.args)
+    if not message:
+        await update.message.reply_text("Usage: /broadcast [message]")
+        return
+
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM subscriptions")
+        rows = c.fetchall()
+        conn.close()
+
+        sent = 0
+        for row in rows:
+            try:
+                await context.bot.send_message(chat_id=row[0], text=f"📢 {message}")
+                sent += 1
+            except:
+                pass
+
+        await update.message.reply_text(f"✅ Sent to {sent} users!")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📌 Commands:\n\n"
-        "/pptx [topic] — PowerPoint\n"
-        "/word [topic] — Word document\n"
-        "/cv [your info] — CV/Resume\n"
-        "/email [topic] — Professional email\n"
+        "/pptx [topic] — PowerPoint (Premium)\n"
+        "/word [topic] — Word document (Premium)\n"
+        "/cv [info] — CV/Resume (Standard+)\n"
+        "/email [topic] — Email (Standard+)\n"
         "/post [topic] — Marketing post\n"
         "/biznes [idea] — Business plan\n"
+        "/pricing — Plans & pricing\n"
+        "/myplan — My current plan\n"
         "/reset — Clear chat history\n"
-        "/help — Help\n\n"
-        "Examples:\n"
-        "/cv Python developer, 3 years experience\n"
-        "/email follow up after interview\n"
-        "/post new coffee shop opening\n"
-        "/biznes online clothing store"
+        "/help — Help"
     )
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,12 +501,16 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Chat history cleared ✅")
 
 async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if get_plan_limits(sub["plan"], "pptx") == 0:
+        await update.message.reply_text("💎 This feature requires Premium plan!\nUse /pricing to upgrade.")
+        return
     topic = " ".join(context.args)
     if not topic:
         await update.message.reply_text("Example: /pptx artificial intelligence")
         return
     await update.message.reply_text(f"⏳ Creating presentation on '{topic}'...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
     try:
         content_str = await generate_content(topic, "pptx")
         content_str = content_str.strip()
@@ -250,18 +521,22 @@ async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content = json.loads(content_str)
         path = create_pptx(content["title"], content["slides"])
         with open(path, "rb") as f:
-            await update.message.reply_document(document=f, filename=f"{topic}.pptx", caption=f"✅ Ready!")
+            await update.message.reply_document(document=f, filename=f"{topic}.pptx", caption="✅ Ready!")
         os.remove(path)
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if get_plan_limits(sub["plan"], "word") == 0:
+        await update.message.reply_text("💎 This feature requires Premium plan!\nUse /pricing to upgrade.")
+        return
     topic = " ".join(context.args)
     if not topic:
         await update.message.reply_text("Example: /word business plan")
         return
     await update.message.reply_text(f"⏳ Creating document on '{topic}'...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_document")
     try:
         content_str = await generate_content(topic, "docx")
         content_str = content_str.strip()
@@ -272,71 +547,84 @@ async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content = json.loads(content_str)
         path = create_docx(content["title"], content["sections"])
         with open(path, "rb") as f:
-            await update.message.reply_document(document=f, filename=f"{topic}.docx", caption=f"✅ Ready!")
+            await update.message.reply_document(document=f, filename=f"{topic}.docx", caption="✅ Ready!")
         os.remove(path)
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if get_plan_limits(sub["plan"], "cv") == 0:
+        await update.message.reply_text("⭐ This feature requires Standard or Premium plan!\nUse /pricing to upgrade.")
+        return
+    if not check_and_increment_usage(user_id, get_plan_limits(sub["plan"], "cv")):
+        await update.message.reply_text("❌ Daily limit reached! Upgrade your plan with /pricing")
+        return
     info = " ".join(context.args)
     if not info:
-        await update.message.reply_text("Example: /cv Python developer, 3 years experience, Tashkent")
+        await update.message.reply_text("Example: /cv Python developer, 3 years experience")
         return
     await update.message.reply_text("⏳ Writing your CV...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
-        prompt = f"""Write a professional CV/Resume for: {info}
-Format it nicely with sections: Summary, Experience, Skills, Education.
-Make it ATS-friendly and professional."""
+        prompt = f"Write a professional CV/Resume for: {info}\nFormat: Summary, Experience, Skills, Education. ATS-friendly."
         reply = await ai_generate(prompt)
         await update.message.reply_text(f"✅ Your CV:\n\n{reply}")
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if get_plan_limits(sub["plan"], "email") == 0:
+        await update.message.reply_text("⭐ This feature requires Standard or Premium plan!\nUse /pricing to upgrade.")
+        return
+    if not check_and_increment_usage(user_id, get_plan_limits(sub["plan"], "email")):
+        await update.message.reply_text("❌ Daily limit reached! Upgrade your plan with /pricing")
+        return
     topic = " ".join(context.args)
     if not topic:
         await update.message.reply_text("Example: /email follow up after job interview")
         return
     await update.message.reply_text("⏳ Writing email...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
-        prompt = f"""Write a professional email about: {topic}
-Include: Subject line, greeting, body, closing.
-Make it professional and concise."""
+        prompt = f"Write a professional email about: {topic}\nInclude: Subject, greeting, body, closing."
         reply = await ai_generate(prompt)
         await update.message.reply_text(f"✅ Your email:\n\n{reply}")
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if not check_and_increment_usage(user_id, get_plan_limits(sub["plan"], "post")):
+        await update.message.reply_text("❌ Daily limit reached! Upgrade your plan with /pricing")
+        return
     topic = " ".join(context.args)
     if not topic:
-        await update.message.reply_text("Example: /post new coffee shop opening in Tashkent")
+        await update.message.reply_text("Example: /post new coffee shop opening")
         return
     await update.message.reply_text("⏳ Writing marketing post...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
-        prompt = f"""Write an engaging social media marketing post about: {topic}
-Include: Hook, main content, call to action, relevant hashtags.
-Make it catchy and professional."""
+        prompt = f"Write an engaging social media marketing post about: {topic}\nInclude: Hook, content, call to action, hashtags."
         reply = await ai_generate(prompt)
         await update.message.reply_text(f"✅ Your post:\n\n{reply}")
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def biznes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if not check_and_increment_usage(user_id, get_plan_limits(sub["plan"], "biznes")):
+        await update.message.reply_text("❌ Daily limit reached! Upgrade your plan with /pricing")
+        return
     idea = " ".join(context.args)
     if not idea:
         await update.message.reply_text("Example: /biznes online clothing store")
         return
     await update.message.reply_text("⏳ Writing business plan...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
-        prompt = f"""Write a detailed business plan for: {idea}
-Include: Executive Summary, Market Analysis, Products/Services, 
-Marketing Strategy, Financial Plan, Operations.
-Make it professional and realistic."""
+        prompt = f"Write a detailed business plan for: {idea}\nInclude: Executive Summary, Market Analysis, Products/Services, Marketing Strategy, Financial Plan."
         reply = await ai_generate(prompt)
         await update.message.reply_text(f"✅ Business plan:\n\n{reply}")
     except Exception as e:
@@ -345,6 +633,11 @@ Make it professional and realistic."""
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
+    sub = get_subscription(user_id)
+
+    if not check_and_increment_usage(user_id, get_plan_limits(sub["plan"], "chat")):
+        await update.message.reply_text("❌ Daily limit reached! Upgrade your plan with /pricing")
+        return
 
     memory = get_memory(user_id)
     memory_context = ""
@@ -359,7 +652,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "You are a professional AI assistant. "
                     "Always reply in the same language the user writes in. "
                     "Keep answers short, clear and natural. "
-                    "Never add unnecessary information about yourself. "
                     + memory_context
                 )
             }
@@ -368,17 +660,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
-        if needs_search(user_text):
-            search_results = tavily.search(query=user_text, max_results=3)
-            search_content = "\n\n".join([
-                f"Source: {r['url']}\n{r['content']}"
-                for r in search_results.get("results", [])
-            ])
-            message_content = (
-                f"User question: {user_text}\n\n"
-                f"Web search results:\n{search_content}\n\n"
-                f"Based on these results, give a clear and accurate answer."
-            )
+        if needs_search(user_text) and get_plan_limits(sub["plan"], "search") != 0:
+            if not check_and_increment_usage(user_id, get_plan_limits(sub["plan"], "search")):
+                message_content = user_text
+            else:
+                search_results = tavily.search(query=user_text, max_results=3)
+                search_content = "\n\n".join([
+                    f"Source: {r['url']}\n{r['content']}"
+                    for r in search_results.get("results", [])
+                ])
+                message_content = (
+                    f"User question: {user_text}\n\n"
+                    f"Web search results:\n{search_content}\n\n"
+                    f"Based on these results, give a clear and accurate answer."
+                )
         else:
             message_content = user_text
 
@@ -397,6 +692,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if get_plan_limits(sub["plan"], "voice") == 0:
+        await update.message.reply_text("💎 Voice messages require Premium plan!\nUse /pricing to upgrade.")
+        return
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
         voice = update.message.voice
@@ -411,10 +710,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         user_text = transcription.text
         await update.message.reply_text(f"🎤 You said: {user_text}")
-
         if user_id not in user_histories:
             user_histories[user_id] = [{"role": "system", "content": "You are a professional AI assistant. Always reply in the same language the user writes in."}]
-
         user_histories[user_id].append({"role": "user", "content": user_text})
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -427,6 +724,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if not check_and_increment_usage(user_id, get_plan_limits(sub["plan"], "image")):
+        await update.message.reply_text("❌ Daily limit reached! Upgrade your plan with /pricing")
+        return
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
         photo = update.message.photo[-1]
@@ -444,6 +746,14 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    sub = get_subscription(user_id)
+    if get_plan_limits(sub["plan"], "pdf") == 0:
+        await update.message.reply_text("⭐ PDF analysis requires Standard or Premium plan!\nUse /pricing to upgrade.")
+        return
+    if not check_and_increment_usage(user_id, get_plan_limits(sub["plan"], "pdf")):
+        await update.message.reply_text("❌ Daily limit reached! Upgrade your plan with /pricing")
+        return
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
         doc = update.message.document
@@ -463,7 +773,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove("temp.pdf")
         if len(text) > 12000:
             text = text[:12000] + "..."
-        user_id = update.effective_user.id
         caption = update.message.caption or "Summarize this document and explain the key points."
         if user_id not in user_histories:
             user_histories[user_id] = [{"role": "system", "content": "You are a professional AI assistant. Always reply in the same language the user writes in."}]
@@ -482,12 +791,14 @@ async def post_init(app):
     init_db()
     await app.bot.set_my_commands([
         BotCommand("start", "Start the bot"),
-        BotCommand("pptx", "Create PowerPoint"),
-        BotCommand("word", "Create Word document"),
-        BotCommand("cv", "Write CV/Resume"),
-        BotCommand("email", "Write professional email"),
-        BotCommand("post", "Write marketing post"),
-        BotCommand("biznes", "Write business plan"),
+        BotCommand("pricing", "Plans & pricing"),
+        BotCommand("myplan", "My current plan"),
+        BotCommand("pptx", "Create PowerPoint (Premium)"),
+        BotCommand("word", "Create Word document (Premium)"),
+        BotCommand("cv", "Write CV (Standard+)"),
+        BotCommand("email", "Write email (Standard+)"),
+        BotCommand("post", "Marketing post"),
+        BotCommand("biznes", "Business plan"),
         BotCommand("reset", "Clear chat history"),
         BotCommand("help", "Help"),
     ])
@@ -497,12 +808,19 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("pricing", pricing_command))
+    app.add_handler(CommandHandler("myplan", myplan_command))
     app.add_handler(CommandHandler("pptx", pptx_command))
     app.add_handler(CommandHandler("word", word_command))
     app.add_handler(CommandHandler("cv", cv_command))
     app.add_handler(CommandHandler("email", email_command))
     app.add_handler(CommandHandler("post", post_command))
     app.add_handler(CommandHandler("biznes", biznes_command))
+    app.add_handler(CommandHandler("admin", admin_command))
+    app.add_handler(CommandHandler("setplan", setplan_command))
+    app.add_handler(CommandHandler("users", users_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_image))
