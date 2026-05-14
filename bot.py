@@ -44,7 +44,6 @@ SEARCH_KEYWORDS = [
     "сегодня", "сейчас", "курс", "цена", "новости"
 ]
 
-# ===== DATABASE =====
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
@@ -128,9 +127,7 @@ def set_plan(user_id, plan, days=30):
         conn = get_conn()
         c = conn.cursor()
         expires_at = datetime.now() + timedelta(days=days) if days else None
-        c.execute("""
-            UPDATE users SET plan=%s, expires_at=%s WHERE user_id=%s
-        """, (plan, expires_at, user_id))
+        c.execute("UPDATE users SET plan=%s, expires_at=%s WHERE user_id=%s", (plan, expires_at, user_id))
         conn.commit()
         conn.close()
     except:
@@ -305,7 +302,6 @@ Min 5 slides. Same language as topic."""
 Min 4 sections. Same language as topic."""
     return await ai_generate(prompt)
 
-# ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
@@ -329,13 +325,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/reset — Clear history"
     )
 
-# ===== UPDATE PLAN =====
 async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     u = get_user(user.id)
     plan = u["plan"] if u else "free"
     expires = u["expires_at"].strftime("%d.%m.%Y") if u and u.get("expires_at") else "—"
-
     keyboard = [
         [InlineKeyboardButton("⭐ Buy Standard — 5 USDT/month", callback_data="buy_standard")],
         [InlineKeyboardButton("💎 Buy Premium — 10 USDT/month", callback_data="buy_premium")],
@@ -368,13 +362,11 @@ async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ===== BUTTON HANDLER =====
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
 
-    # Buy buttons
     if data == "buy_standard":
         keyboard = [[InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{ADMIN_USERNAME}")]]
         await query.message.reply_text(
@@ -407,17 +399,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    # Admin panel - set plan buttons
     elif data.startswith("ap_setplan_"):
         parts = data.split("_")
         target_id = int(parts[2])
         plan = parts[3]
         days = 30 if plan != "free" else None
         set_plan(target_id, plan, days)
-
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
         await query.message.edit_text(
-            f"✅ Done!\n\n"
+            f"✅ Done!\n"
             f"User {target_id} → {plan_emoji[plan]} {plan.upper()}"
         )
         try:
@@ -428,7 +418,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-    # Admin panel - block/unblock
     elif data.startswith("ap_block_"):
         target_id = int(data.split("_")[2])
         set_blocked(target_id, True)
@@ -439,7 +428,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         set_blocked(target_id, False)
         await query.message.edit_text(f"✅ User {target_id} has been unblocked!")
 
-# ===== ADMIN PANEL =====
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Access denied!")
@@ -465,19 +453,63 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{'═' * 28}\n\n"
         f"📊 Statistics:\n"
         f"👥 Total users: {total}\n"
-        f"🆓 Free: {total - standard - premium - blocked}\n"
+        f"🆓 Free: {total - standard - premium}\n"
         f"⭐ Standard: {standard}\n"
         f"💎 Premium: {premium}\n"
         f"🚫 Blocked: {blocked}\n"
         f"💰 Monthly revenue: ~${revenue}\n\n"
         f"{'─' * 28}\n"
-        f"🔍 Search user:\n"
-        f"/find [user\\_id] — Find & manage user\n\n"
-        f"📢 Broadcast:\n"
-        f"/broadcast [message]\n\n"
-        f"📋 All paid users:\n"
-        f"/users"
+        f"Commands:\n"
+        f"/users — All users list\n"
+        f"/find [user\\_id] — Manage user\n"
+        f"/broadcast [text] — Message all"
     )
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!")
+        return
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("""
+            SELECT user_id, username, plan, is_blocked
+            FROM users
+            ORDER BY
+                CASE plan
+                    WHEN 'premium' THEN 1
+                    WHEN 'standard' THEN 2
+                    ELSE 3
+                END,
+                joined_at DESC
+        """)
+        rows = c.fetchall()
+        conn.close()
+
+        if not rows:
+            await update.message.reply_text("No users yet.")
+            return
+
+        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
+        text = f"👥 All Users: {len(rows)}\n{'═' * 30}\n\n"
+
+        for row in rows:
+            uid, username, plan, is_blocked = row
+            uname = f"@{username}" if username else "no_username"
+            blocked = " 🚫" if is_blocked else ""
+            emoji = plan_emoji.get(plan, "🆓")
+            text += f"{emoji} Username: {uname}    ID: {uid}{blocked}\n"
+
+        # Split if too long
+        if len(text) > 4000:
+            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for part in parts:
+                await update.message.reply_text(part)
+        else:
+            await update.message.reply_text(text)
+
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
 
 async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -496,7 +528,6 @@ async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         plan = u["plan"]
         expires = u["expires_at"].strftime("%d.%m.%Y") if u.get("expires_at") else "—"
         status = "🚫 Blocked" if u["is_blocked"] else "✅ Active"
-        name = u["full_name"] or "—"
         username = f"@{u['username']}" if u["username"] else "—"
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
 
@@ -518,7 +549,6 @@ async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 User Info\n"
             f"{'─' * 25}\n"
             f"🆔 ID: {target_id}\n"
-            f"👤 Name: {name}\n"
             f"📱 Username: {username}\n"
             f"📋 Plan: {plan_emoji.get(plan, '🆓')} {plan.upper()}\n"
             f"📅 Expires: {expires}\n"
@@ -529,29 +559,6 @@ async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except ValueError:
         await update.message.reply_text("❌ Invalid user ID!")
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Access denied!")
-        return
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT user_id, full_name, plan, expires_at FROM users WHERE plan != 'free' ORDER BY plan DESC")
-        rows = c.fetchall()
-        conn.close()
-        if not rows:
-            await update.message.reply_text("No paid subscribers yet.")
-            return
-        text = f"💰 Paid subscribers: {len(rows)}\n{'─' * 25}\n\n"
-        for row in rows:
-            uid, name, plan, expires = row
-            exp = expires.strftime("%d.%m.%Y") if expires else "—"
-            emoji = "⭐" if plan == "standard" else "💎"
-            text += f"{emoji} {name or uid} | {plan.upper()} | {exp}\n"
-        await update.message.reply_text(text)
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -580,7 +587,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
-# ===== OTHER COMMANDS =====
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📌 Commands:\n\n"
