@@ -52,17 +52,15 @@ def init_db():
     conn = get_conn()
     c = conn.cursor()
     c.execute("""
-        CREATE TABLE IF NOT EXISTS user_memory (
-            user_id BIGINT PRIMARY KEY,
-            name TEXT,
-            facts TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            user_id BIGINT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT UNIQUE,
+            username TEXT,
+            full_name TEXT,
             plan TEXT DEFAULT 'free',
             expires_at TIMESTAMP,
+            is_blocked BOOLEAN DEFAULT FALSE,
+            joined_at TIMESTAMP DEFAULT NOW(),
             usage_chat INTEGER DEFAULT 0,
             usage_search INTEGER DEFAULT 0,
             usage_image INTEGER DEFAULT 0,
@@ -74,38 +72,56 @@ def init_db():
             last_reset DATE DEFAULT CURRENT_DATE
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_memory (
+            user_id BIGINT PRIMARY KEY,
+            name TEXT,
+            facts TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
-def get_subscription(user_id):
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT plan, expires_at, last_reset FROM subscriptions WHERE user_id = %s", (user_id,))
-        row = c.fetchone()
-        conn.close()
-        if not row:
-            return {"plan": "free", "expires_at": None}
-        plan, expires_at, last_reset = row
-        if expires_at and datetime.now() > expires_at:
-            set_plan(user_id, "free", None)
-            return {"plan": "free", "expires_at": None}
-        return {"plan": plan, "expires_at": expires_at}
-    except:
-        return {"plan": "free", "expires_at": None}
-
-def ensure_user(user_id):
+def ensure_user(user_id, username=None, full_name=None):
     try:
         conn = get_conn()
         c = conn.cursor()
         c.execute("""
-            INSERT INTO subscriptions (user_id) VALUES (%s)
-            ON CONFLICT (user_id) DO NOTHING
-        """, (user_id,))
+            INSERT INTO users (user_id, username, full_name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                full_name = EXCLUDED.full_name
+        """, (user_id, username, full_name))
         conn.commit()
         conn.close()
     except:
         pass
+
+def get_user(user_id):
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT id, plan, expires_at, is_blocked, full_name, username FROM users WHERE user_id = %s", (user_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return None
+        id_, plan, expires_at, is_blocked, full_name, username = row
+        if expires_at and datetime.now() > expires_at and plan != 'free':
+            set_plan(user_id, "free", None)
+            plan = "free"
+            expires_at = None
+        return {
+            "id": id_,
+            "plan": plan,
+            "expires_at": expires_at,
+            "is_blocked": is_blocked,
+            "full_name": full_name,
+            "username": username
+        }
+    except:
+        return None
 
 def set_plan(user_id, plan, days=30):
     try:
@@ -113,10 +129,18 @@ def set_plan(user_id, plan, days=30):
         c = conn.cursor()
         expires_at = datetime.now() + timedelta(days=days) if days else None
         c.execute("""
-            INSERT INTO subscriptions (user_id, plan, expires_at)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET plan=%s, expires_at=%s
-        """, (user_id, plan, expires_at, plan, expires_at))
+            UPDATE users SET plan=%s, expires_at=%s WHERE user_id=%s
+        """, (plan, expires_at, user_id))
+        conn.commit()
+        conn.close()
+    except:
+        pass
+
+def set_blocked(user_id, blocked):
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("UPDATE users SET is_blocked=%s WHERE user_id=%s", (blocked, user_id))
         conn.commit()
         conn.close()
     except:
@@ -131,24 +155,24 @@ def check_limit(user_id, feature, limit):
         conn = get_conn()
         c = conn.cursor()
         today = datetime.now().date()
-        c.execute("SELECT last_reset FROM subscriptions WHERE user_id = %s", (user_id,))
+        c.execute("SELECT last_reset FROM users WHERE user_id = %s", (user_id,))
         row = c.fetchone()
         if row and row[0] < today:
             c.execute("""
-                UPDATE subscriptions SET
+                UPDATE users SET
                 usage_chat=0, usage_search=0, usage_image=0,
                 usage_post=0, usage_biznes=0, usage_pdf=0,
                 usage_cv=0, usage_email=0, last_reset=%s
                 WHERE user_id=%s
             """, (today, user_id))
             conn.commit()
-        c.execute(f"SELECT usage_{feature} FROM subscriptions WHERE user_id = %s", (user_id,))
+        c.execute(f"SELECT usage_{feature} FROM users WHERE user_id = %s", (user_id,))
         row = c.fetchone()
         usage = row[0] if row else 0
         if usage >= limit:
             conn.close()
             return False
-        c.execute(f"UPDATE subscriptions SET usage_{feature} = usage_{feature} + 1 WHERE user_id = %s", (user_id,))
+        c.execute(f"UPDATE users SET usage_{feature} = usage_{feature} + 1 WHERE user_id = %s", (user_id,))
         conn.commit()
         conn.close()
         return True
@@ -197,12 +221,11 @@ async def update_memory(user_id, user_text, reply):
     memory = get_memory(user_id)
     current_facts = memory["facts"] if memory else ""
     current_name = memory["name"] if memory else ""
-    prompt = f"""Extract user info from this conversation.
-Current name: {current_name}
-Current facts: {current_facts}
+    prompt = f"""Extract user info from conversation.
+Current name: {current_name}, facts: {current_facts}
 User: {user_text}
 Assistant: {reply}
-Reply ONLY in JSON: {{"name": "name or empty", "facts": "short summary of facts"}}"""
+Reply ONLY JSON: {{"name": "name or empty", "facts": "short facts"}}"""
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -282,12 +305,12 @@ Min 5 slides. Same language as topic."""
 Min 4 sections. Same language as topic."""
     return await ai_generate(prompt)
 
-# ===== HANDLERS =====
+# ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    ensure_user(user_id)
-    sub = get_subscription(user_id)
-    plan = sub["plan"].upper()
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    plan = u["plan"].upper() if u else "FREE"
     await update.message.reply_text(
         f"Hello! I am Chatbot 🤖\n"
         f"Your plan: {plan}\n\n"
@@ -306,24 +329,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/reset — Clear history"
     )
 
+# ===== UPDATE PLAN =====
 async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    sub = get_subscription(user_id)
-    plan = sub["plan"]
-    expires = sub["expires_at"].strftime("%d.%m.%Y") if sub.get("expires_at") else "—"
+    user = update.effective_user
+    u = get_user(user.id)
+    plan = u["plan"] if u else "free"
+    expires = u["expires_at"].strftime("%d.%m.%Y") if u and u.get("expires_at") else "—"
 
     keyboard = [
         [InlineKeyboardButton("⭐ Buy Standard — 5 USDT/month", callback_data="buy_standard")],
         [InlineKeyboardButton("💎 Buy Premium — 10 USDT/month", callback_data="buy_premium")],
     ]
-
     await update.message.reply_text(
-        f"💰 Plans & Pricing:\n\n"
+        f"💰 Plans & Pricing\n"
+        f"{'─' * 28}\n\n"
         f"🆓 FREE — Free\n"
         f"• Chat: 20/day\n"
         f"• Internet search: 20/day\n"
         f"• Image analysis: 20/day\n"
-        f"• Marketing post: 20/day\n\n"
+        f"• Marketing post: 20/day\n"
+        f"• Business plan: 20/day\n"
+        f"• Memory: Unlimited\n\n"
         f"⭐ STANDARD — 5 USDT/month\n"
         f"• Everything in Free: 30/day\n"
         f"• PDF analysis: 30/day\n"
@@ -331,92 +357,178 @@ async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"• Email writing: 30/day\n"
         f"• Memory: Unlimited\n\n"
         f"💎 PREMIUM — 10 USDT/month\n"
-        f"• Everything unlimited\n"
-        f"• Voice messages\n"
-        f"• PowerPoint creation\n"
-        f"• Word documents\n"
-        f"• Priority support\n\n"
+        f"• Everything: Unlimited\n"
+        f"• Voice messages ✓\n"
+        f"• PowerPoint creation ✓\n"
+        f"• Word documents ✓\n"
+        f"• Priority support ✓\n\n"
+        f"{'─' * 28}\n"
         f"👤 Your plan: {plan.upper()}\n"
         f"📅 Expires: {expires}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+# ===== BUTTON HANDLER =====
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
+    data = query.data
 
-    if query.data == "buy_standard":
+    # Buy buttons
+    if data == "buy_standard":
         keyboard = [[InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{ADMIN_USERNAME}")]]
         await query.message.reply_text(
-            f"⭐ STANDARD — 5 USDT/month\n\n"
+            f"⭐ STANDARD — 5 USDT/month\n"
+            f"{'─' * 30}\n\n"
             f"💳 Pay to card:\n"
             f"`{CARD_NUMBER}`\n\n"
-            f"💵 Amount: 5 USDT equivalent in UZS\n\n"
-            f"📸 After payment:\n"
-            f"1. Screenshot oling\n"
-            f"2. Admin ga yuboring\n"
-            f"3. Your ID: `{user_id}`\n\n"
-            f"✅ Admin 1 soat ichida aktivlashtiradi!",
+            f"💵 Amount: 5 USDT equivalent\n\n"
+            f"📋 After payment:\n"
+            f"1. Take a screenshot\n"
+            f"2. Send it to admin\n"
+            f"3. Your plan will be activated within 1 hour ✅",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    elif query.data == "buy_premium":
+    elif data == "buy_premium":
         keyboard = [[InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{ADMIN_USERNAME}")]]
         await query.message.reply_text(
-            f"💎 PREMIUM — 10 USDT/month\n\n"
+            f"💎 PREMIUM — 10 USDT/month\n"
+            f"{'─' * 30}\n\n"
             f"💳 Pay to card:\n"
             f"`{CARD_NUMBER}`\n\n"
-            f"💵 Amount: 10 USDT equivalent in UZS\n\n"
-            f"📸 After payment:\n"
-            f"1. Screenshot oling\n"
-            f"2. Admin ga yuboring\n"
-            f"3. Your ID: `{user_id}`\n\n"
-            f"✅ Admin 1 soat ichida aktivlashtiradi!",
+            f"💵 Amount: 10 USDT equivalent\n\n"
+            f"📋 After payment:\n"
+            f"1. Take a screenshot\n"
+            f"2. Send it to admin\n"
+            f"3. Your plan will be activated within 1 hour ✅",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-# ===== ADMIN =====
+    # Admin panel - set plan buttons
+    elif data.startswith("ap_setplan_"):
+        parts = data.split("_")
+        target_id = int(parts[2])
+        plan = parts[3]
+        days = 30 if plan != "free" else None
+        set_plan(target_id, plan, days)
+
+        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
+        await query.message.edit_text(
+            f"✅ Done!\n\n"
+            f"User {target_id} → {plan_emoji[plan]} {plan.upper()}"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=f"{plan_emoji[plan]} Your plan has been updated to {plan.upper()}!\n\nUse /updateplan to see details."
+            )
+        except:
+            pass
+
+    # Admin panel - block/unblock
+    elif data.startswith("ap_block_"):
+        target_id = int(data.split("_")[2])
+        set_blocked(target_id, True)
+        await query.message.edit_text(f"🚫 User {target_id} has been blocked!")
+
+    elif data.startswith("ap_unblock_"):
+        target_id = int(data.split("_")[2])
+        set_blocked(target_id, False)
+        await query.message.edit_text(f"✅ User {target_id} has been unblocked!")
+
+# ===== ADMIN PANEL =====
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Access denied!")
         return
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM users")
+        total = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE plan='standard'")
+        standard = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE plan='premium'")
+        premium = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE is_blocked=TRUE")
+        blocked = c.fetchone()[0]
+        conn.close()
+        revenue = standard * 5 + premium * 10
+    except:
+        total = standard = premium = blocked = revenue = 0
+
     await update.message.reply_text(
-        "🔧 Admin Panel\n\n"
-        "/setplan [user_id] [plan] — Set plan\n"
-        "  free | standard | premium\n"
-        "  Example: /setplan 123456 premium\n\n"
-        "/users — All subscribers\n"
-        "/stats — Bot statistics\n"
-        "/broadcast [text] — Message to all"
+        f"🔧 Admin Panel\n"
+        f"{'═' * 28}\n\n"
+        f"📊 Statistics:\n"
+        f"👥 Total users: {total}\n"
+        f"🆓 Free: {total - standard - premium - blocked}\n"
+        f"⭐ Standard: {standard}\n"
+        f"💎 Premium: {premium}\n"
+        f"🚫 Blocked: {blocked}\n"
+        f"💰 Monthly revenue: ~${revenue}\n\n"
+        f"{'─' * 28}\n"
+        f"🔍 Search user:\n"
+        f"/find [user\\_id] — Find & manage user\n\n"
+        f"📢 Broadcast:\n"
+        f"/broadcast [message]\n\n"
+        f"📋 All paid users:\n"
+        f"/users"
     )
 
-async def setplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Access denied!")
         return
-    if len(context.args) < 2:
-        await update.message.reply_text("Usage: /setplan [user_id] [plan]")
+    if not context.args:
+        await update.message.reply_text("Usage: /find [user_id]")
         return
     try:
         target_id = int(context.args[0])
-        plan = context.args[1].lower()
-        if plan not in ["free", "standard", "premium"]:
-            await update.message.reply_text("❌ Plan: free, standard, premium")
+        u = get_user(target_id)
+        if not u:
+            await update.message.reply_text(f"❌ User {target_id} not found!")
             return
-        days = 30 if plan != "free" else None
-        set_plan(target_id, plan, days)
-        await update.message.reply_text(f"✅ User {target_id} → {plan.upper()}")
-        emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
-        try:
-            await context.bot.send_message(
-                chat_id=target_id,
-                text=f"{emoji[plan]} Your plan upgraded to {plan.upper()}! 🎉\n\nUse /updateplan to see details."
-            )
-        except:
-            pass
+
+        plan = u["plan"]
+        expires = u["expires_at"].strftime("%d.%m.%Y") if u.get("expires_at") else "—"
+        status = "🚫 Blocked" if u["is_blocked"] else "✅ Active"
+        name = u["full_name"] or "—"
+        username = f"@{u['username']}" if u["username"] else "—"
+        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
+
+        keyboard = [
+            [
+                InlineKeyboardButton("🆓 Free", callback_data=f"ap_setplan_{target_id}_free"),
+                InlineKeyboardButton("⭐ Standard", callback_data=f"ap_setplan_{target_id}_standard"),
+                InlineKeyboardButton("💎 Premium", callback_data=f"ap_setplan_{target_id}_premium"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "✅ Unblock" if u["is_blocked"] else "🚫 Block",
+                    callback_data=f"ap_unblock_{target_id}" if u["is_blocked"] else f"ap_block_{target_id}"
+                )
+            ]
+        ]
+
+        await update.message.reply_text(
+            f"👤 User Info\n"
+            f"{'─' * 25}\n"
+            f"🆔 ID: {target_id}\n"
+            f"👤 Name: {name}\n"
+            f"📱 Username: {username}\n"
+            f"📋 Plan: {plan_emoji.get(plan, '🆓')} {plan.upper()}\n"
+            f"📅 Expires: {expires}\n"
+            f"🔰 Status: {status}\n"
+            f"{'─' * 25}\n"
+            f"Select action:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID!")
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -427,46 +539,19 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT user_id, plan, expires_at FROM subscriptions ORDER BY plan DESC")
+        c.execute("SELECT user_id, full_name, plan, expires_at FROM users WHERE plan != 'free' ORDER BY plan DESC")
         rows = c.fetchall()
         conn.close()
         if not rows:
-            await update.message.reply_text("No users yet.")
+            await update.message.reply_text("No paid subscribers yet.")
             return
-        text = f"👥 Total users: {len(rows)}\n\n"
-        paid = [r for r in rows if r[1] != "free"]
-        text += f"💰 Paid: {len(paid)}\n"
-        text += f"🆓 Free: {len(rows) - len(paid)}\n\n"
-        for row in paid:
-            uid, plan, expires = row
+        text = f"💰 Paid subscribers: {len(rows)}\n{'─' * 25}\n\n"
+        for row in rows:
+            uid, name, plan, expires = row
             exp = expires.strftime("%d.%m.%Y") if expires else "—"
-            text += f"ID: {uid} | {plan.upper()} | {exp}\n"
+            emoji = "⭐" if plan == "standard" else "💎"
+            text += f"{emoji} {name or uid} | {plan.upper()} | {exp}\n"
         await update.message.reply_text(text)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Access denied!")
-        return
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM subscriptions")
-        total = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM subscriptions WHERE plan = 'standard'")
-        standard = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM subscriptions WHERE plan = 'premium'")
-        premium = c.fetchone()[0]
-        conn.close()
-        await update.message.reply_text(
-            f"📊 Bot Statistics\n\n"
-            f"👥 Total users: {total}\n"
-            f"🆓 Free: {total - standard - premium}\n"
-            f"⭐ Standard: {standard}\n"
-            f"💎 Premium: {premium}\n"
-            f"💰 Monthly revenue: ~${standard * 5 + premium * 10}"
-        )
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -481,7 +566,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT user_id FROM subscriptions")
+        c.execute("SELECT user_id FROM users WHERE is_blocked = FALSE")
         rows = c.fetchall()
         conn.close()
         sent = 0
@@ -495,6 +580,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
+# ===== OTHER COMMANDS =====
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📌 Commands:\n\n"
@@ -507,7 +593,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/updateplan — Plans & pricing\n"
         "/reset — Clear chat history\n"
         "/help — Help\n\n"
-        "⭐ = Standard+\n"
+        "⭐ = Standard or Premium\n"
         "💎 = Premium only"
     )
 
@@ -517,8 +603,8 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sub = get_subscription(user_id)
-    if get_limits(sub["plan"])["pptx"] == 0:
+    u = get_user(user_id)
+    if not u or get_limits(u["plan"])["pptx"] == 0:
         keyboard = [[InlineKeyboardButton("💎 Upgrade to Premium", callback_data="buy_premium")]]
         await update.message.reply_text("💎 PowerPoint requires Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -544,8 +630,8 @@ async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sub = get_subscription(user_id)
-    if get_limits(sub["plan"])["word"] == 0:
+    u = get_user(user_id)
+    if not u or get_limits(u["plan"])["word"] == 0:
         keyboard = [[InlineKeyboardButton("💎 Upgrade to Premium", callback_data="buy_premium")]]
         await update.message.reply_text("💎 Word requires Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -571,8 +657,8 @@ async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sub = get_subscription(user_id)
-    limits = get_limits(sub["plan"])
+    u = get_user(user_id)
+    limits = get_limits(u["plan"] if u else "free")
     if limits["cv"] == 0:
         keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
         await update.message.reply_text("⭐ CV requires Standard or Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -593,8 +679,8 @@ async def cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sub = get_subscription(user_id)
-    limits = get_limits(sub["plan"])
+    u = get_user(user_id)
+    limits = get_limits(u["plan"] if u else "free")
     if limits["email"] == 0:
         keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
         await update.message.reply_text("⭐ Email requires Standard or Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -615,8 +701,8 @@ async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sub = get_subscription(user_id)
-    limits = get_limits(sub["plan"])
+    u = get_user(user_id)
+    limits = get_limits(u["plan"] if u else "free")
     if not check_limit(user_id, "post", limits["post"]):
         await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.")
         return
@@ -633,8 +719,8 @@ async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def biznes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sub = get_subscription(user_id)
-    limits = get_limits(sub["plan"])
+    u = get_user(user_id)
+    limits = get_limits(u["plan"] if u else "free")
     if not check_limit(user_id, "biznes", limits["biznes"]):
         await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.")
         return
@@ -650,17 +736,22 @@ async def biznes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_text = update.message.text
-    ensure_user(user_id)
-    sub = get_subscription(user_id)
-    limits = get_limits(sub["plan"])
+    user = update.effective_user
+    user_id = user.id
+    ensure_user(user_id, user.username, user.full_name)
+    u = get_user(user_id)
 
+    if u and u["is_blocked"]:
+        await update.message.reply_text("🚫 You are blocked. Contact admin.")
+        return
+
+    limits = get_limits(u["plan"] if u else "free")
     if not check_limit(user_id, "chat", limits["chat"]):
         keyboard = [[InlineKeyboardButton("💰 Upgrade Plan", callback_data="buy_standard")]]
         await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
+    user_text = update.message.text
     memory = get_memory(user_id)
     memory_context = ""
     if memory and (memory.get("name") or memory.get("facts")):
@@ -680,7 +771,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if needs_search(user_text) and limits["search"] != 0:
             search_results = tavily.search(query=user_text, max_results=3)
             search_content = "\n\n".join([f"Source: {r['url']}\n{r['content']}" for r in search_results.get("results", [])])
-            message_content = f"User question: {user_text}\n\nWeb search results:\n{search_content}\n\nGive a clear answer based on results."
+            message_content = f"User question: {user_text}\n\nWeb results:\n{search_content}\n\nGive a clear answer."
         else:
             message_content = user_text
 
@@ -695,8 +786,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    sub = get_subscription(user_id)
-    if get_limits(sub["plan"])["voice"] == 0:
+    u = get_user(user_id)
+    if u and u["is_blocked"]:
+        return
+    if not u or get_limits(u["plan"])["voice"] == 0:
         keyboard = [[InlineKeyboardButton("💎 Upgrade to Premium", callback_data="buy_premium")]]
         await update.message.reply_text("💎 Voice requires Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -721,10 +814,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    ensure_user(user_id)
-    sub = get_subscription(user_id)
-    limits = get_limits(sub["plan"])
+    user = update.effective_user
+    user_id = user.id
+    ensure_user(user_id, user.username, user.full_name)
+    u = get_user(user_id)
+    if u and u["is_blocked"]:
+        return
+    limits = get_limits(u["plan"] if u else "free")
     if not check_limit(user_id, "image", limits["image"]):
         keyboard = [[InlineKeyboardButton("💰 Upgrade Plan", callback_data="buy_standard")]]
         await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -746,10 +842,13 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error: {str(e)}")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    ensure_user(user_id)
-    sub = get_subscription(user_id)
-    limits = get_limits(sub["plan"])
+    user = update.effective_user
+    user_id = user.id
+    ensure_user(user_id, user.username, user.full_name)
+    u = get_user(user_id)
+    if u and u["is_blocked"]:
+        return
+    limits = get_limits(u["plan"] if u else "free")
     if limits["pdf"] == 0:
         keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
         await update.message.reply_text("⭐ PDF requires Standard or Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -777,7 +876,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = update.message.caption or "Summarize this document and explain the key points."
         if user_id not in user_histories:
             user_histories[user_id] = [{"role": "system", "content": "You are a professional AI assistant. Always reply in the same language the user writes in."}]
-        user_histories[user_id].append({"role": "user", "content": f"PDF content:\n\n{text}\n\nRequest: {caption}"})
+        user_histories[user_id].append({"role": "user", "content": f"PDF:\n\n{text}\n\nRequest: {caption}"})
         response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=user_histories[user_id])
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
@@ -813,9 +912,8 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("setplan", setplan_command))
+    app.add_handler(CommandHandler("find", find_command))
     app.add_handler(CommandHandler("users", users_command))
-    app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
