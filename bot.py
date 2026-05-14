@@ -322,6 +322,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📱 /post — Marketing post\n\n"
         f"💰 /updateplan — Update plan\n"
         f"/help — Help\n"
+        f"/reset — Clear history"
     )
 
 async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
