@@ -1,0 +1,8 @@
+python-telegram-bot
+groq
+tavily-python
+python-dotenv
+schedule
+requests
+schedule
+youtube-search-python
