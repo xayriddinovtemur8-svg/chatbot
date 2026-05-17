@@ -8,3 +8,4 @@ requests
 tavily-python
 aiosqlite
 psycopg2-binary
+gtts
