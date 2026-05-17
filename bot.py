@@ -9,6 +9,7 @@ from groq import Groq
 from tavily import TavilyClient
 from dotenv import load_dotenv
 from gtts import gTTS
+from langdetect import detect
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -46,6 +47,20 @@ SEARCH_KEYWORDS = [
     "bugun", "hozir", "narx", "kurs", "yangilik", "ob-havo", "oxirgi",
     "сегодня", "сейчас", "курс", "цена", "новости"
 ]
+
+GTTS_LANG_MAP = {
+    "uz": "ru", "en": "en", "ru": "ru", "tr": "tr", "de": "de",
+    "fr": "fr", "es": "es", "ar": "ar", "ko": "ko", "ja": "ja",
+    "zh-cn": "zh-CN", "zh-tw": "zh-TW", "it": "it", "pt": "pt",
+    "nl": "nl", "pl": "pl", "uk": "uk", "kk": "ru"
+}
+
+def detect_lang(text):
+    try:
+        lang = detect(text)
+        return GTTS_LANG_MAP.get(lang, "en")
+    except:
+        return "en"
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -334,7 +349,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📧 /email — Write email\n"
         f"📱 /post — Marketing post\n"
         f"🔊 /ai_sound [matn] — AI Ovoz (Standard+)\n"
-        f"🎨 /imagine [tavsif] — AI Rasm (Standard+)\n"
+        f"🎨 /imagine [tavsif] — AI Rasm (Standard+)\n\n"
         f"💰 /updateplan — Update plan\n"
         f"/help — Help\n"
         f"/reset — Clear history"
@@ -811,7 +826,8 @@ async def handle_tts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("⏳ Generating voice...")
     try:
-        tts = gTTS(text=text, lang="uz")
+        lang = detect_lang(text)
+        tts = gTTS(text=text, lang=lang)
         buf = io.BytesIO()
         tts.write_to_fp(buf)
         buf.seek(0)
@@ -842,7 +858,7 @@ async def handle_imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        response = requests.post(API_URL, headers=headers, json={"inputs": prompt})
+        response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=60)
         if response.status_code == 200:
             img_buf = io.BytesIO(response.content)
             img_buf.name = "image.png"
