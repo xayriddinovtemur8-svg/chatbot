@@ -1,4 +1,5 @@
 import os
+import io
 import requests
 import fitz
 import json
@@ -7,6 +8,7 @@ from datetime import datetime, timedelta
 from groq import Groq
 from tavily import TavilyClient
 from dotenv import load_dotenv
+from gtts import gTTS
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -28,6 +30,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 ADMIN_ID = 8230883785
 CARD_NUMBER = "4916990345412073"
@@ -68,6 +71,8 @@ def init_db():
             usage_pdf INTEGER DEFAULT 0,
             usage_cv INTEGER DEFAULT 0,
             usage_email INTEGER DEFAULT 0,
+            usage_tts INTEGER DEFAULT 0,
+            usage_imagine INTEGER DEFAULT 0,
             last_reset DATE DEFAULT CURRENT_DATE
         )
     """)
@@ -163,7 +168,8 @@ def check_limit(user_id, feature, limit):
                 UPDATE users SET
                 usage_chat=0, usage_search=0, usage_image=0,
                 usage_post=0, usage_biznes=0, usage_pdf=0,
-                usage_cv=0, usage_email=0, last_reset=%s
+                usage_cv=0, usage_email=0, usage_tts=0, usage_imagine=0,
+                last_reset=%s
                 WHERE user_id=%s
             """, (today, user_id))
             conn.commit()
@@ -182,16 +188,18 @@ def check_limit(user_id, feature, limit):
 
 def get_limits(plan):
     if plan == "premium":
-        return {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word"]}
+        return {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word","tts","imagine"]}
     elif plan == "standard":
         return {
             "chat": 30, "search": 30, "image": 30, "post": 30, "biznes": 30,
-            "pdf": 30, "cv": 30, "email": 30, "voice": 0, "pptx": 0, "word": 0
+            "pdf": 30, "cv": 30, "email": 30, "voice": 0, "pptx": 0, "word": 0,
+            "tts": 30, "imagine": 30
         }
     else:
         return {
             "chat": 20, "search": 20, "image": 20, "post": 20, "biznes": 20,
-            "pdf": 0, "cv": 0, "email": 0, "voice": 0, "pptx": 0, "word": 0
+            "pdf": 0, "cv": 0, "email": 0, "voice": 0, "pptx": 0, "word": 0,
+            "tts": 0, "imagine": 0
         }
 
 def get_memory(user_id):
@@ -324,7 +332,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 /word — Word document\n"
         f"👤 /cv — Write CV\n"
         f"📧 /email — Write email\n"
-        f"📱 /post — Marketing post\n\n"
+        f"📱 /post — Marketing post\n"
+        f"🔊 /ai_sound [matn] — AI Ovoz (Standard+)\n"
+        f"🎨 /imagine [tavsif] — AI Rasm (Standard+)\n"
+        f"🔊 /ai_sound — AI Voice (Standard+)\n"
+        f"🎨 /imagine — AI Image (Standard+)\n\n"
         f"💰 /updateplan — Update plan\n"
         f"/help — Help\n"
         f"/reset — Clear history"
@@ -356,6 +368,8 @@ async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"• PDF analysis: 30/day\n"
         f"• CV writing: 30/day\n"
         f"• Email writing: 30/day\n"
+        f"• AI Voice: 30/day\n"
+        f"• AI Image: 30/day\n"
         f"• Memory: Unlimited\n\n"
         f"💎 PREMIUM — 10 USDT/month\n"
         f"• Everything: Unlimited\n"
@@ -613,6 +627,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/email [topic] — Email ⭐\n"
         "/post [topic] — Marketing post\n"
         "/biznes [idea] — Business plan\n"
+        "/ai_sound [text] — AI Voice 🔊 ⭐\n"
+        "/imagine [prompt] — AI Image 🎨 ⭐\n"
         "/updateplan — Plans & pricing\n"
         "/reset — Clear chat history\n"
         "/help — Help\n\n"
@@ -773,6 +789,68 @@ async def biznes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         reply = await ai_generate(f"Write a detailed business plan for: {idea}\nInclude: Executive Summary, Market Analysis, Products, Marketing Strategy, Financial Plan.")
         await update.message.reply_text(f"✅ Business plan:\n\n{reply}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def handle_tts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    ensure_user(user_id, user.username, user.full_name)
+    u = get_user(user_id)
+    if u["is_blocked"]:
+        return
+    limits = get_limits(u["plan"])
+    if limits.get("tts") == 0:
+        keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
+        await update.message.reply_text("⭐ AI Sound requires Standard or Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    if not check_limit(user_id, "tts", limits["tts"]):
+        await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.")
+        return
+    text = " ".join(context.args)
+    if not text:
+        await update.message.reply_text("Example: /ai_sound Salom, qanday yordam bera olaman?")
+        return
+    await update.message.reply_text("⏳ Generating voice...")
+    try:
+        tts = gTTS(text=text, lang="uz")
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        await update.message.reply_voice(voice=buf)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
+async def handle_imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    ensure_user(user_id, user.username, user.full_name)
+    u = get_user(user_id)
+    if u["is_blocked"]:
+        return
+    limits = get_limits(u["plan"])
+    if limits.get("imagine") == 0:
+        keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
+        await update.message.reply_text("⭐ AI Image requires Standard or Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    if not check_limit(user_id, "imagine", limits["imagine"]):
+        await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.")
+        return
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text("Example: /imagine a beautiful sunset over mountains")
+        return
+    await update.message.reply_text("⏳ Generating image, please wait 20-30 seconds...")
+    try:
+        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+        response = requests.post(API_URL, headers=headers, json={"inputs": prompt})
+        if response.status_code == 200:
+            img_buf = io.BytesIO(response.content)
+            img_buf.name = "image.png"
+            await update.message.reply_photo(photo=img_buf, caption=f"🎨 {prompt}")
+        else:
+            await update.message.reply_text("❌ Model is loading, please try again in 20 seconds...")
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -938,6 +1016,8 @@ async def post_init(app):
         BotCommand("email", "Write email (Standard+)"),
         BotCommand("post", "Marketing post"),
         BotCommand("biznes", "Business plan"),
+        BotCommand("ai_sound", "AI Voice (Standard+)"),
+        BotCommand("imagine", "AI Image (Standard+)"),
         BotCommand("reset", "Clear history"),
         BotCommand("help", "Help"),
     ])
@@ -952,6 +1032,8 @@ def main():
     app.add_handler(CommandHandler("email", email_command))
     app.add_handler(CommandHandler("post", post_command))
     app.add_handler(CommandHandler("biznes", biznes_command))
+    app.add_handler(CommandHandler("ai_sound", handle_tts))
+    app.add_handler(CommandHandler("imagine", handle_imagine))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin_command))
