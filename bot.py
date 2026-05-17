@@ -335,8 +335,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📱 /post — Marketing post\n"
         f"🔊 /ai_sound [matn] — AI Ovoz (Standard+)\n"
         f"🎨 /imagine [tavsif] — AI Rasm (Standard+)\n"
-        f"🔊 /ai_sound — AI Voice (Standard+)\n"
-        f"🎨 /imagine — AI Image (Standard+)\n\n"
         f"💰 /updateplan — Update plan\n"
         f"/help — Help\n"
         f"/reset — Clear history"
