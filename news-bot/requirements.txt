@@ -6,3 +6,4 @@ schedule
 requests
 schedule
 youtube-search-python
+gtts
