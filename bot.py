@@ -87,7 +87,6 @@ def init_db():
             usage_cv INTEGER DEFAULT 0,
             usage_email INTEGER DEFAULT 0,
             usage_tts INTEGER DEFAULT 0,
-            usage_imagine INTEGER DEFAULT 0,
             last_reset DATE DEFAULT CURRENT_DATE
         )
     """)
@@ -183,7 +182,7 @@ def check_limit(user_id, feature, limit):
                 UPDATE users SET
                 usage_chat=0, usage_search=0, usage_image=0,
                 usage_post=0, usage_biznes=0, usage_pdf=0,
-                usage_cv=0, usage_email=0, usage_tts=0, usage_imagine=0,
+                usage_cv=0, usage_email=0, usage_tts=0,
                 last_reset=%s
                 WHERE user_id=%s
             """, (today, user_id))
@@ -203,18 +202,18 @@ def check_limit(user_id, feature, limit):
 
 def get_limits(plan):
     if plan == "premium":
-        return {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word","tts","imagine"]}
+        return {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word","tts"]}
     elif plan == "standard":
         return {
             "chat": 30, "search": 30, "image": 30, "post": 30, "biznes": 30,
             "pdf": 30, "cv": 30, "email": 30, "voice": 0, "pptx": 0, "word": 0,
-            "tts": 30, "imagine": 30
+            "tts": 30
         }
     else:
         return {
             "chat": 20, "search": 20, "image": 20, "post": 20, "biznes": 20,
             "pdf": 0, "cv": 0, "email": 0, "voice": 0, "pptx": 0, "word": 0,
-            "tts": 0, "imagine": 0
+            "tts": 0
         }
 
 def get_memory(user_id):
@@ -348,8 +347,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 /cv — Write CV\n"
         f"📧 /email — Write email\n"
         f"📱 /post — Marketing post\n"
-        f"🔊 /ai_sound [matn] — AI Ovoz (Standard+)\n"
-        f"🎨 /imagine [tavsif] — AI Rasm (Standard+)\n\n"
+        f"🔊 /ai_sound — AI Voice (Standard+)\n\n"
         f"💰 /updateplan — Update plan\n"
         f"/help — Help\n"
         f"/reset — Clear history"
@@ -382,7 +380,6 @@ async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"• CV writing: 30/day\n"
         f"• Email writing: 30/day\n"
         f"• AI Voice: 30/day\n"
-        f"• AI Image: 30/day\n"
         f"• Memory: Unlimited\n\n"
         f"💎 PREMIUM — 10 USDT/month\n"
         f"• Everything: Unlimited\n"
@@ -634,14 +631,13 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📌 Commands:\n\n"
-        "/pptx [topic] — PowerPoint 💎\n"
-        "/word [topic] — Word document 💎\n"
-        "/cv [info] — CV/Resume ⭐\n"
-        "/email [topic] — Email ⭐\n"
-        "/post [topic] — Marketing post\n"
-        "/biznes [idea] — Business plan\n"
-        "/ai_sound [text] — AI Voice 🔊 ⭐\n"
-        "/imagine [prompt] — AI Image 🎨 ⭐\n"
+        "/pptx — PowerPoint 💎\n"
+        "/word — Word document 💎\n"
+        "/cv — CV/Resume ⭐\n"
+        "/email — Email ⭐\n"
+        "/post — Marketing post\n"
+        "/biznes — Business plan\n"
+        "/ai_sound — AI Voice 🔊 ⭐\n"
         "/updateplan — Plans & pricing\n"
         "/reset — Clear chat history\n"
         "/help — Help\n\n"
@@ -822,7 +818,7 @@ async def handle_tts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = " ".join(context.args)
     if not text:
-        await update.message.reply_text("Example: /ai_sound Salom, qanday yordam bera olaman?")
+        await update.message.reply_text("Example: /ai_sound Hello, how are you?")
         return
     await update.message.reply_text("⏳ Generating voice...")
     try:
@@ -832,39 +828,6 @@ async def handle_tts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tts.write_to_fp(buf)
         buf.seek(0)
         await update.message.reply_voice(voice=buf)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def handle_imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-    ensure_user(user_id, user.username, user.full_name)
-    u = get_user(user_id)
-    if u["is_blocked"]:
-        return
-    limits = get_limits(u["plan"])
-    if limits.get("imagine") == 0:
-        keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
-        await update.message.reply_text("⭐ AI Image requires Standard or Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-    if not check_limit(user_id, "imagine", limits["imagine"]):
-        await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.")
-        return
-    prompt = " ".join(context.args)
-    if not prompt:
-        await update.message.reply_text("Example: /imagine a beautiful sunset over mountains")
-        return
-    await update.message.reply_text("⏳ Generating image, please wait 20-30 seconds...")
-    try:
-        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=60)
-        if response.status_code == 200:
-            img_buf = io.BytesIO(response.content)
-            img_buf.name = "image.png"
-            await update.message.reply_photo(photo=img_buf, caption=f"🎨 {prompt}")
-        else:
-            await update.message.reply_text("❌ Model is loading, please try again in 20 seconds...")
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -893,10 +856,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in user_histories:
         user_histories[user_id] = [{"role": "system", "content": (
             "You are a professional AI assistant. "
-            "Always reply in the same language the user writes in. "
+            "VERY IMPORTANT: Always reply in the SAME language the user uses in their message. "
+            "If user writes in Uzbek, reply in Uzbek. "
+            "If user writes in English, reply in English. "
+            "If user writes in Russian, reply in Russian. "
+            "Never switch languages on your own. "
             "Keep answers short, clear and natural. "
             + memory_context
         )}]
+    else:
+        user_histories[user_id][0]["content"] = (
+            "You are a professional AI assistant. "
+            "VERY IMPORTANT: Always reply in the SAME language the user uses in their message. "
+            "If user writes in Uzbek, reply in Uzbek. "
+            "If user writes in English, reply in English. "
+            "If user writes in Russian, reply in Russian. "
+            "Never switch languages on your own. "
+            "Keep answers short, clear and natural. "
+            + memory_context
+        )
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
@@ -904,7 +882,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if needs_search(user_text) and limits["search"] != 0:
             search_results = tavily.search(query=user_text, max_results=3)
             search_content = "\n\n".join([f"Source: {r['url']}\n{r['content']}" for r in search_results.get("results", [])])
-            message_content = f"User question: {user_text}\n\nWeb results:\n{search_content}\n\nGive a clear answer."
+            message_content = f"User question: {user_text}\n\nWeb results:\n{search_content}\n\nGive a clear answer in the same language as the user's question."
         else:
             message_content = user_text
 
@@ -1011,7 +989,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = update.message.caption or "Summarize this document and explain the key points."
         if user_id not in user_histories:
             user_histories[user_id] = [{"role": "system", "content": "You are a professional AI assistant. Always reply in the same language the user writes in."}]
-        user_histories[user_id].append({"role": "user", "content": f"PDF:\n\n{text}\n\nRequest: {caption}"})
+        user_histories[user_id].append({"role": "user", "content": f"PDF:\n\n{text}\n\nRequest: {caption}"}),
         response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=user_histories[user_id])
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
@@ -1031,7 +1009,6 @@ async def post_init(app):
         BotCommand("post", "Marketing post"),
         BotCommand("biznes", "Business plan"),
         BotCommand("ai_sound", "AI Voice (Standard+)"),
-        BotCommand("imagine", "AI Image (Standard+)"),
         BotCommand("reset", "Clear history"),
         BotCommand("help", "Help"),
     ])
@@ -1047,7 +1024,6 @@ def main():
     app.add_handler(CommandHandler("post", post_command))
     app.add_handler(CommandHandler("biznes", biznes_command))
     app.add_handler(CommandHandler("ai_sound", handle_tts))
-    app.add_handler(CommandHandler("imagine", handle_imagine))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin_command))
