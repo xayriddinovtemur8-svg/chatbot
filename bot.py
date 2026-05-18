@@ -856,7 +856,7 @@ async def handle_imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("⏳ Generating image, please wait 20-30 seconds...")
     try:
-        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        API_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=60)
         if response.status_code == 200:
