@@ -9,6 +9,7 @@ from groq import Groq
 from tavily import TavilyClient
 from dotenv import load_dotenv
 from gtts import gTTS
+from langdetect import detect
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -31,9 +32,9 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 HF_TOKEN = os.getenv("HF_TOKEN")
+CARD_NUMBER = os.getenv("CARD_NUMBER")
 
 ADMIN_ID = 8230883785
-CARD_NUMBER = os.getenv("CARD_NUMBER")
 ADMIN_USERNAME = "temur_uzb7779"
 
 client = Groq(api_key=GROQ_API_KEY)
@@ -46,6 +47,20 @@ SEARCH_KEYWORDS = [
     "bugun", "hozir", "narx", "kurs", "yangilik", "ob-havo", "oxirgi",
     "сегодня", "сейчас", "курс", "цена", "новости"
 ]
+
+GTTS_LANG_MAP = {
+    "uz": "ru", "en": "en", "ru": "ru", "tr": "tr", "de": "de",
+    "fr": "fr", "es": "es", "ar": "ar", "ko": "ko", "ja": "ja",
+    "zh-cn": "zh-CN", "zh-tw": "zh-TW", "it": "it", "pt": "pt",
+    "nl": "nl", "pl": "pl", "uk": "uk", "kk": "ru"
+}
+
+def detect_lang(text):
+    try:
+        lang = detect(text)
+        return GTTS_LANG_MAP.get(lang, "en")
+    except:
+        return "en"
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
@@ -72,7 +87,6 @@ def init_db():
             usage_cv INTEGER DEFAULT 0,
             usage_email INTEGER DEFAULT 0,
             usage_tts INTEGER DEFAULT 0,
-            usage_imagine INTEGER DEFAULT 0,
             last_reset DATE DEFAULT CURRENT_DATE
         )
     """)
@@ -134,9 +148,7 @@ def set_plan(user_id, plan, days=30):
         conn = get_conn()
         c = conn.cursor()
         expires_at = datetime.now() + timedelta(days=days) if days else None
-        c.execute("""
-            UPDATE users SET plan=%s, expires_at=%s WHERE user_id=%s
-        """, (plan, expires_at, user_id))
+        c.execute("UPDATE users SET plan=%s, expires_at=%s WHERE user_id=%s", (plan, expires_at, user_id))
         conn.commit()
         conn.close()
     except:
@@ -168,9 +180,8 @@ def check_limit(user_id, feature, limit):
                 UPDATE users SET
                 usage_chat=0, usage_search=0, usage_image=0,
                 usage_post=0, usage_biznes=0, usage_pdf=0,
-                usage_cv=0, usage_email=0, usage_tts=0, usage_imagine=0,
-                last_reset=%s
-                WHERE user_id=%s
+                usage_cv=0, usage_email=0, usage_tts=0,
+                last_reset=%s WHERE user_id=%s
             """, (today, user_id))
             conn.commit()
         c.execute(f"SELECT usage_{feature} FROM users WHERE user_id = %s", (user_id,))
@@ -188,18 +199,18 @@ def check_limit(user_id, feature, limit):
 
 def get_limits(plan):
     if plan == "premium":
-        return {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word","tts","imagine"]}
+        return {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word","tts"]}
     elif plan == "standard":
         return {
             "chat": 30, "search": 30, "image": 30, "post": 30, "biznes": 30,
             "pdf": 30, "cv": 30, "email": 30, "voice": 0, "pptx": 0, "word": 0,
-            "tts": 30, "imagine": 30
+            "tts": 30
         }
     else:
         return {
             "chat": 20, "search": 20, "image": 20, "post": 20, "biznes": 20,
             "pdf": 0, "cv": 0, "email": 0, "voice": 0, "pptx": 0, "word": 0,
-            "tts": 0, "imagine": 0
+            "tts": 0
         }
 
 def get_memory(user_id):
@@ -333,8 +344,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 /cv — Write CV\n"
         f"📧 /email — Write email\n"
         f"📱 /post — Marketing post\n"
-        f"🔊 /ai_sound — AI Voice (Standard+)\n"
-        f"🎨 /imagine — AI Image (Standard+)\n\n"
+        f"🔊 /ai_sound — AI Voice (Standard+)\n\n"
         f"💰 /updateplan — Update plan\n"
         f"/help — Help\n"
         f"/reset — Clear history"
@@ -367,7 +377,6 @@ async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"• CV writing: 30/day\n"
         f"• Email writing: 30/day\n"
         f"• AI Voice: 30/day\n"
-        f"• AI Image: 30/day\n"
         f"• Memory: Unlimited\n\n"
         f"💎 PREMIUM — 10 USDT/month\n"
         f"• Everything: Unlimited\n"
@@ -427,8 +436,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         set_plan(target_id, plan, days)
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
         await query.message.edit_text(
-            f"✅ Done!\n"
-            f"User {target_id} → {plan_emoji[plan]} {plan.upper()}"
+            f"✅ Done!\nUser {target_id} → {plan_emoji[plan]} {plan.upper()}"
         )
         try:
             await context.bot.send_message(
@@ -494,39 +502,27 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c = conn.cursor()
         c.execute("""
             SELECT user_id, username, plan, is_blocked
-            FROM users
-            ORDER BY
-                CASE plan
-                    WHEN 'premium' THEN 1
-                    WHEN 'standard' THEN 2
-                    ELSE 3
-                END,
+            FROM users ORDER BY
+                CASE plan WHEN 'premium' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END,
                 joined_at DESC
         """)
         rows = c.fetchall()
         conn.close()
-
         if not rows:
             await update.message.reply_text("No users yet.")
             return
-
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
         text = f"👥 All Users: {len(rows)}\n{'═' * 30}\n\n"
-
         for row in rows:
             uid, username, plan, is_blocked = row
             uname = f"@{username}" if username else "no_username"
             blocked = " 🚫" if is_blocked else ""
-            emoji = plan_emoji.get(plan, "🆓")
-            text += f"{emoji} Username: {uname}    ID: {uid}{blocked}\n"
-
+            text += f"{plan_emoji.get(plan,'🆓')} {uname}    {uid}{blocked}\n"
         if len(text) > 4000:
-            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
-            for part in parts:
+            for part in [text[i:i+4000] for i in range(0, len(text), 4000)]:
                 await update.message.reply_text(part)
         else:
             await update.message.reply_text(text)
-
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -541,49 +537,35 @@ async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(context.args[0])
         conn = get_conn()
         c = conn.cursor()
-        c.execute("""
-            SELECT plan, expires_at, is_blocked, full_name, username 
-            FROM users WHERE user_id = %s
-        """, (target_id,))
+        c.execute("SELECT plan, expires_at, is_blocked, full_name, username FROM users WHERE user_id = %s", (target_id,))
         row = c.fetchone()
         conn.close()
-
         if not row:
             await update.message.reply_text(f"❌ User {target_id} not found!")
             return
-
         plan, expires_at, is_blocked, full_name, username = row
         expires = expires_at.strftime("%d.%m.%Y") if expires_at else "—"
-        status = "🚫 Blocked" if is_blocked else "✅ Active"
-        uname = f"@{username}" if username else "—"
-        name = full_name or "—"
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
-
         keyboard = [
             [
                 InlineKeyboardButton("🆓 Free", callback_data=f"ap_setplan_{target_id}_free"),
                 InlineKeyboardButton("⭐ Standard", callback_data=f"ap_setplan_{target_id}_standard"),
                 InlineKeyboardButton("💎 Premium", callback_data=f"ap_setplan_{target_id}_premium"),
             ],
-            [
-                InlineKeyboardButton(
-                    "✅ Unblock" if is_blocked else "🚫 Block",
-                    callback_data=f"ap_unblock_{target_id}" if is_blocked else f"ap_block_{target_id}"
-                )
-            ]
+            [InlineKeyboardButton(
+                "✅ Unblock" if is_blocked else "🚫 Block",
+                callback_data=f"ap_unblock_{target_id}" if is_blocked else f"ap_block_{target_id}"
+            )]
         ]
-
         await update.message.reply_text(
-            f"👤 User Info\n"
-            f"{'─' * 25}\n"
+            f"👤 User Info\n{'─' * 25}\n"
             f"🆔 ID: {target_id}\n"
-            f"👤 Name: {name}\n"
-            f"📱 Username: {uname}\n"
-            f"📋 Plan: {plan_emoji.get(plan, '🆓')} {plan.upper()}\n"
+            f"👤 Name: {full_name or '—'}\n"
+            f"📱 Username: @{username if username else '—'}\n"
+            f"📋 Plan: {plan_emoji.get(plan,'🆓')} {plan.upper()}\n"
             f"📅 Expires: {expires}\n"
-            f"🔰 Status: {status}\n"
-            f"{'─' * 25}\n"
-            f"Select action:",
+            f"🔰 Status: {'🚫 Blocked' if is_blocked else '✅ Active'}\n"
+            f"{'─' * 25}\nSelect action:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     except ValueError:
@@ -619,14 +601,13 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📌 Commands:\n\n"
-        "/pptx [topic] — PowerPoint 💎\n"
-        "/word [topic] — Word document 💎\n"
-        "/cv [info] — CV/Resume ⭐\n"
-        "/email [topic] — Email ⭐\n"
-        "/post [topic] — Marketing post\n"
-        "/biznes [idea] — Business plan\n"
-        "/ai_sound [text] — AI Voice 🔊 ⭐\n"
-        "/imagine [prompt] — AI Image 🎨 ⭐\n"
+        "/pptx — PowerPoint 💎\n"
+        "/word — Word document 💎\n"
+        "/cv — CV/Resume ⭐\n"
+        "/email — Email ⭐\n"
+        "/post — Marketing post\n"
+        "/biznes — Business plan\n"
+        "/ai_sound — AI Voice 🔊 ⭐\n"
         "/updateplan — Plans & pricing\n"
         "/reset — Clear chat history\n"
         "/help — Help\n\n"
@@ -807,48 +788,16 @@ async def handle_tts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = " ".join(context.args)
     if not text:
-        await update.message.reply_text("Example: /ai_sound Salom, qanday yordam bera olaman?")
+        await update.message.reply_text("Example: /ai_sound Hello, how are you?")
         return
     await update.message.reply_text("⏳ Generating voice...")
     try:
-        tts = gTTS(text=text, lang="uz")
+        lang = detect_lang(text)
+        tts = gTTS(text=text, lang=lang)
         buf = io.BytesIO()
         tts.write_to_fp(buf)
         buf.seek(0)
         await update.message.reply_voice(voice=buf)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def handle_imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-    ensure_user(user_id, user.username, user.full_name)
-    u = get_user(user_id)
-    if u["is_blocked"]:
-        return
-    limits = get_limits(u["plan"])
-    if limits.get("imagine") == 0:
-        keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
-        await update.message.reply_text("⭐ AI Image requires Standard or Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-    if not check_limit(user_id, "imagine", limits["imagine"]):
-        await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.")
-        return
-    prompt = " ".join(context.args)
-    if not prompt:
-        await update.message.reply_text("Example: /imagine a beautiful sunset over mountains")
-        return
-    await update.message.reply_text("⏳ Generating image, please wait 20-30 seconds...")
-    try:
-        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        response = requests.post(API_URL, headers=headers, json={"inputs": prompt})
-        if response.status_code == 200:
-            img_buf = io.BytesIO(response.content)
-            img_buf.name = "image.png"
-            await update.message.reply_photo(photo=img_buf, caption=f"🎨 {prompt}")
-        else:
-            await update.message.reply_text("❌ Model is loading, please try again in 20 seconds...")
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -857,41 +806,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     ensure_user(user_id, user.username, user.full_name)
     u = get_user(user_id)
-
     if u["is_blocked"]:
         await update.message.reply_text("🚫 You are blocked. Contact admin.")
         return
-
     limits = get_limits(u["plan"])
     if not check_limit(user_id, "chat", limits["chat"]):
         keyboard = [[InlineKeyboardButton("💰 Upgrade Plan", callback_data="buy_standard")]]
         await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
-
     user_text = update.message.text
     memory = get_memory(user_id)
     memory_context = ""
     if memory and (memory.get("name") or memory.get("facts")):
         memory_context = f"User info — name: {memory['name']}, facts: {memory['facts']}. "
-
     if user_id not in user_histories:
         user_histories[user_id] = [{"role": "system", "content": (
             "You are a professional AI assistant. "
-            "Always reply in the same language the user writes in. "
+            "VERY IMPORTANT: Always reply in the SAME language the user uses in their message. "
+            "If user writes in Uzbek, reply in Uzbek. "
+            "If user writes in English, reply in English. "
+            "If user writes in Russian, reply in Russian. "
+            "Never switch languages on your own. "
             "Keep answers short, clear and natural. "
             + memory_context
         )}]
-
+    else:
+        user_histories[user_id][0]["content"] = (
+            "You are a professional AI assistant. "
+            "VERY IMPORTANT: Always reply in the SAME language the user uses in their message. "
+            "If user writes in Uzbek, reply in Uzbek. "
+            "If user writes in English, reply in English. "
+            "If user writes in Russian, reply in Russian. "
+            "Never switch languages on your own. "
+            "Keep answers short, clear and natural. "
+            + memory_context
+        )
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
     try:
         if needs_search(user_text) and limits["search"] != 0:
             search_results = tavily.search(query=user_text, max_results=3)
             search_content = "\n\n".join([f"Source: {r['url']}\n{r['content']}" for r in search_results.get("results", [])])
-            message_content = f"User question: {user_text}\n\nWeb results:\n{search_content}\n\nGive a clear answer."
+            message_content = f"User question: {user_text}\n\nWeb results:\n{search_content}\n\nAnswer in the same language as the question."
         else:
             message_content = user_text
-
         user_histories[user_id].append({"role": "user", "content": message_content})
         response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=user_histories[user_id])
         reply = response.choices[0].message.content
@@ -1015,7 +972,6 @@ async def post_init(app):
         BotCommand("post", "Marketing post"),
         BotCommand("biznes", "Business plan"),
         BotCommand("ai_sound", "AI Voice (Standard+)"),
-        BotCommand("imagine", "AI Image (Standard+)"),
         BotCommand("reset", "Clear history"),
         BotCommand("help", "Help"),
     ])
@@ -1031,7 +987,6 @@ def main():
     app.add_handler(CommandHandler("post", post_command))
     app.add_handler(CommandHandler("biznes", biznes_command))
     app.add_handler(CommandHandler("ai_sound", handle_tts))
-    app.add_handler(CommandHandler("imagine", handle_imagine))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin_command))
