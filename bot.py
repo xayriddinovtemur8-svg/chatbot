@@ -33,9 +33,9 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-ADMIN_ID = 8230883785
+ADMIN_ID = 8228135519
 os.getenv("CARD_NUMBER")
-ADMIN_USERNAME = "temur_uzb7779"
+ADMIN_USERNAME = "e1be_12"
 
 client = Groq(api_key=GROQ_API_KEY)
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
