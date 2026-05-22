@@ -34,7 +34,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 ADMIN_ID = 8228135519
-os.getenv("CARD_NUMBER")
+CARD_NUMBER = "5614681859880274"
 ADMIN_USERNAME = "e1be_12"
 
 client = Groq(api_key=GROQ_API_KEY)
