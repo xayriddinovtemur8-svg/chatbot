@@ -35,7 +35,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 CARD_NUMBER = os.getenv("CARD_NUMBER")
 
 ADMIN_ID = 8228135519
-ADMIN_USERNAME = "temur_uzb7779"
+ADMIN_USERNAME = "e1be_12"
 
 client = Groq(api_key=GROQ_API_KEY)
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
