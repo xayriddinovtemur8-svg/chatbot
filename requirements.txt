@@ -10,3 +10,4 @@ aiosqlite
 psycopg2-binary
 gtts
 langdetect
+python-telegram-bot[job-queue]
