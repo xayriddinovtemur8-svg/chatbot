@@ -95,6 +95,8 @@ def init_db():
             referral_code TEXT,
             referred_by BIGINT,
             referral_count INTEGER DEFAULT 0,
+            claimed_standard BOOLEAN DEFAULT FALSE,
+            claimed_premium BOOLEAN DEFAULT FALSE,
             last_reset DATE DEFAULT CURRENT_DATE
         )
     """)
@@ -122,23 +124,8 @@ def ensure_user(user_id, username=None, full_name=None, referred_by=None):
         """, (user_id, username, full_name, code, referred_by))
         conn.commit()
         if referred_by:
-            c.execute("""
-                UPDATE users SET referral_count = referral_count + 1
-                WHERE user_id = %s
-            """, (referred_by,))
+            c.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = %s", (referred_by,))
             conn.commit()
-            c.execute("SELECT referral_count, plan FROM users WHERE user_id = %s", (referred_by,))
-            row = c.fetchone()
-            if row:
-                count, plan = row
-                if count == 10 and plan == 'free':
-                    expires_at = datetime.now() + timedelta(days=15)
-                    c.execute("UPDATE users SET plan='standard', expires_at=%s WHERE user_id=%s", (expires_at, referred_by))
-                    conn.commit()
-                elif 30 <= count <= 50:
-                    expires_at = datetime.now() + timedelta(days=15)
-                    c.execute("UPDATE users SET plan='premium', expires_at=%s WHERE user_id=%s", (expires_at, referred_by))
-                    conn.commit()
         conn.close()
     except:
         pass
@@ -148,14 +135,17 @@ def get_user(user_id):
         conn = get_conn()
         c = conn.cursor()
         c.execute("""
-            SELECT plan, expires_at, is_blocked, full_name, username, referral_code, referral_count
+            SELECT plan, expires_at, is_blocked, full_name, username,
+                   referral_code, referral_count, claimed_standard, claimed_premium
             FROM users WHERE user_id = %s
         """, (user_id,))
         row = c.fetchone()
         conn.close()
         if not row:
-            return {"plan": "free", "expires_at": None, "is_blocked": False, "full_name": None, "username": None, "referral_code": None, "referral_count": 0}
-        plan, expires_at, is_blocked, full_name, username, referral_code, referral_count = row
+            return {"plan": "free", "expires_at": None, "is_blocked": False,
+                    "full_name": None, "username": None, "referral_code": None,
+                    "referral_count": 0, "claimed_standard": False, "claimed_premium": False}
+        plan, expires_at, is_blocked, full_name, username, referral_code, referral_count, claimed_standard, claimed_premium = row
         if expires_at and datetime.now() > expires_at and plan != 'free':
             set_plan(user_id, "free", None)
             plan = "free"
@@ -167,10 +157,14 @@ def get_user(user_id):
             "full_name": full_name,
             "username": username,
             "referral_code": referral_code,
-            "referral_count": referral_count or 0
+            "referral_count": referral_count or 0,
+            "claimed_standard": claimed_standard or False,
+            "claimed_premium": claimed_premium or False
         }
     except:
-        return {"plan": "free", "expires_at": None, "is_blocked": False, "full_name": None, "username": None, "referral_code": None, "referral_count": 0}
+        return {"plan": "free", "expires_at": None, "is_blocked": False,
+                "full_name": None, "username": None, "referral_code": None,
+                "referral_count": 0, "claimed_standard": False, "claimed_premium": False}
 
 def set_plan(user_id, plan, days=30):
     try:
@@ -370,22 +364,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
     ensure_user(user.id, user.username, user.full_name, referred_by)
-    if referred_by:
-        try:
-            u_ref = get_user(referred_by)
-            count = u_ref["referral_count"]
-            if count == 10:
-                await context.bot.send_message(
-                    chat_id=referred_by,
-                    text="🎉 Tabriklaymiz! 10 ta do'st taklif qildingiz!\n⭐ Standard tarif 15 kunga berildi!"
-                )
-            elif count == 30:
-                await context.bot.send_message(
-                    chat_id=referred_by,
-                    text="🎉 Tabriklaymiz! 30 ta do'st taklif qildingiz!\n💎 Premium tarif 15 kunga berildi!"
-                )
-        except:
-            pass
     u = get_user(user.id)
     plan = u["plan"].upper()
     plan_emoji = {"FREE": "🆓", "STANDARD": "⭐", "PREMIUM": "💎"}.get(plan, "🆓")
@@ -415,17 +393,30 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = get_user(user.id)
     code = u["referral_code"]
     count = u["referral_count"]
+    claimed_standard = u["claimed_standard"]
+    claimed_premium = u["claimed_premium"]
     bot = await context.bot.get_me()
     link = f"https://t.me/{bot.username}?start={code}"
+
+    keyboard = []
+    if count >= 10 and not claimed_standard:
+        keyboard.append([InlineKeyboardButton("🎁 Claim Standard 15 days", callback_data="claim_standard")])
+    if count >= 30 and not claimed_premium:
+        keyboard.append([InlineKeyboardButton("🎁 Claim Premium 15 days", callback_data="claim_premium")])
+
+    standard_status = "✅ Claimed" if claimed_standard else ("🔓 Ready!" if count >= 10 else f"{count}/10")
+    premium_status = "✅ Claimed" if claimed_premium else ("🔓 Ready!" if count >= 30 else f"{count}/30")
+
     await update.message.reply_text(
         f"👥 Referral Program\n"
         f"{'─' * 28}\n\n"
         f"🔗 Your invite link:\n{link}\n\n"
         f"📊 Invited: {count} friends\n\n"
         f"🎁 Rewards:\n"
-        f"• 10 friends → ⭐ Standard 15 days FREE\n"
-        f"• 30-50 friends → 💎 Premium 15 days FREE\n\n"
-        f"Share this link with your friends! 🚀"
+        f"• 10 friends → ⭐ Standard 15 days — {standard_status}\n"
+        f"• 30 friends → 💎 Premium 15 days — {premium_status}\n\n"
+        f"Share this link with your friends! 🚀",
+        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
     )
 
 async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -474,7 +465,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = query.from_user.id
 
-    if data == "buy_standard":
+    if data == "claim_standard":
+        u = get_user(user_id)
+        if u["referral_count"] >= 10 and not u["claimed_standard"]:
+            set_plan(user_id, "standard", 15)
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("UPDATE users SET claimed_standard=TRUE WHERE user_id=%s", (user_id,))
+            conn.commit()
+            conn.close()
+            await query.message.edit_text("🎉 Congratulations!\n⭐ Standard plan activated for 15 days!")
+        else:
+            await query.answer("❌ Already claimed or not enough referrals!", show_alert=True)
+
+    elif data == "claim_premium":
+        u = get_user(user_id)
+        if u["referral_count"] >= 30 and not u["claimed_premium"]:
+            set_plan(user_id, "premium", 15)
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("UPDATE users SET claimed_premium=TRUE WHERE user_id=%s", (user_id,))
+            conn.commit()
+            conn.close()
+            await query.message.edit_text("🎉 Congratulations!\n💎 Premium plan activated for 15 days!")
+        else:
+            await query.answer("❌ Already claimed or not enough referrals!", show_alert=True)
+
+    elif data == "buy_standard":
         keyboard = [[InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{ADMIN_USERNAME}")]]
         await query.message.reply_text(
             f"⭐ STANDARD — 5 USDT/month\n"
@@ -551,7 +568,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         revenue = standard * 5 + premium * 10
     except:
         total = standard = premium = blocked = revenue = 0
-
     await update.message.reply_text(
         f"🔧 Admin Panel\n"
         f"{'═' * 28}\n\n"
@@ -577,10 +593,8 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = get_conn()
         c = conn.cursor()
         c.execute("""
-            SELECT user_id, username, plan, is_blocked
-            FROM users ORDER BY
-                CASE plan WHEN 'premium' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END,
-                joined_at DESC
+            SELECT user_id, username, plan, is_blocked FROM users
+            ORDER BY CASE plan WHEN 'premium' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END, joined_at DESC
         """)
         rows = c.fetchall()
         conn.close()
