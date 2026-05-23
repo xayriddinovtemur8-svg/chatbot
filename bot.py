@@ -4,6 +4,8 @@ import requests
 import fitz
 import json
 import psycopg2
+import random
+import string
 from datetime import datetime, timedelta
 from groq import Groq
 from tavily import TavilyClient
@@ -32,9 +34,9 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 HF_TOKEN = os.getenv("HF_TOKEN")
+CARD_NUMBER = os.getenv("CARD_NUMBER")
 
 ADMIN_ID = 8230883785
-CARD_NUMBER = "48547002151326"
 ADMIN_USERNAME = "temur_uzb7779"
 
 client = Groq(api_key=GROQ_API_KEY)
@@ -62,6 +64,9 @@ def detect_lang(text):
     except:
         return "en"
 
+def generate_referral_code():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
@@ -87,6 +92,9 @@ def init_db():
             usage_cv INTEGER DEFAULT 0,
             usage_email INTEGER DEFAULT 0,
             usage_tts INTEGER DEFAULT 0,
+            referral_code TEXT,
+            referred_by BIGINT,
+            referral_count INTEGER DEFAULT 0,
             last_reset DATE DEFAULT CURRENT_DATE
         )
     """)
@@ -100,18 +108,37 @@ def init_db():
     conn.commit()
     conn.close()
 
-def ensure_user(user_id, username=None, full_name=None):
+def ensure_user(user_id, username=None, full_name=None, referred_by=None):
     try:
         conn = get_conn()
         c = conn.cursor()
+        code = generate_referral_code()
         c.execute("""
-            INSERT INTO users (user_id, username, full_name)
-            VALUES (%s, %s, %s)
+            INSERT INTO users (user_id, username, full_name, referral_code, referred_by)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (user_id) DO UPDATE SET
                 username = EXCLUDED.username,
                 full_name = EXCLUDED.full_name
-        """, (user_id, username, full_name))
+        """, (user_id, username, full_name, code, referred_by))
         conn.commit()
+        if referred_by:
+            c.execute("""
+                UPDATE users SET referral_count = referral_count + 1
+                WHERE user_id = %s
+            """, (referred_by,))
+            conn.commit()
+            c.execute("SELECT referral_count, plan FROM users WHERE user_id = %s", (referred_by,))
+            row = c.fetchone()
+            if row:
+                count, plan = row
+                if count == 10 and plan == 'free':
+                    expires_at = datetime.now() + timedelta(days=15)
+                    c.execute("UPDATE users SET plan='standard', expires_at=%s WHERE user_id=%s", (expires_at, referred_by))
+                    conn.commit()
+                elif 30 <= count <= 50:
+                    expires_at = datetime.now() + timedelta(days=15)
+                    c.execute("UPDATE users SET plan='premium', expires_at=%s WHERE user_id=%s", (expires_at, referred_by))
+                    conn.commit()
         conn.close()
     except:
         pass
@@ -121,14 +148,14 @@ def get_user(user_id):
         conn = get_conn()
         c = conn.cursor()
         c.execute("""
-            SELECT plan, expires_at, is_blocked, full_name, username 
+            SELECT plan, expires_at, is_blocked, full_name, username, referral_code, referral_count
             FROM users WHERE user_id = %s
         """, (user_id,))
         row = c.fetchone()
         conn.close()
         if not row:
-            return {"plan": "free", "expires_at": None, "is_blocked": False, "full_name": None, "username": None}
-        plan, expires_at, is_blocked, full_name, username = row
+            return {"plan": "free", "expires_at": None, "is_blocked": False, "full_name": None, "username": None, "referral_code": None, "referral_count": 0}
+        plan, expires_at, is_blocked, full_name, username, referral_code, referral_count = row
         if expires_at and datetime.now() > expires_at and plan != 'free':
             set_plan(user_id, "free", None)
             plan = "free"
@@ -138,19 +165,19 @@ def get_user(user_id):
             "expires_at": expires_at,
             "is_blocked": is_blocked,
             "full_name": full_name,
-            "username": username
+            "username": username,
+            "referral_code": referral_code,
+            "referral_count": referral_count or 0
         }
     except:
-        return {"plan": "free", "expires_at": None, "is_blocked": False, "full_name": None, "username": None}
+        return {"plan": "free", "expires_at": None, "is_blocked": False, "full_name": None, "username": None, "referral_code": None, "referral_count": 0}
 
 def set_plan(user_id, plan, days=30):
     try:
         conn = get_conn()
         c = conn.cursor()
         expires_at = datetime.now() + timedelta(days=days) if days else None
-        c.execute("""
-            UPDATE users SET plan=%s, expires_at=%s WHERE user_id=%s
-        """, (plan, expires_at, user_id))
+        c.execute("UPDATE users SET plan=%s, expires_at=%s WHERE user_id=%s", (plan, expires_at, user_id))
         conn.commit()
         conn.close()
     except:
@@ -183,8 +210,7 @@ def check_limit(user_id, feature, limit):
                 usage_chat=0, usage_search=0, usage_image=0,
                 usage_post=0, usage_biznes=0, usage_pdf=0,
                 usage_cv=0, usage_email=0, usage_tts=0,
-                last_reset=%s
-                WHERE user_id=%s
+                last_reset=%s WHERE user_id=%s
             """, (today, user_id))
             conn.commit()
         c.execute(f"SELECT usage_{feature} FROM users WHERE user_id = %s", (user_id,))
@@ -330,7 +356,36 @@ Min 4 sections. Same language as topic."""
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
+    referred_by = None
+    if context.args:
+        try:
+            ref_code = context.args[0]
+            conn = get_conn()
+            c = conn.cursor()
+            c.execute("SELECT user_id FROM users WHERE referral_code = %s", (ref_code,))
+            row = c.fetchone()
+            conn.close()
+            if row and row[0] != user.id:
+                referred_by = row[0]
+        except:
+            pass
+    ensure_user(user.id, user.username, user.full_name, referred_by)
+    if referred_by:
+        try:
+            u_ref = get_user(referred_by)
+            count = u_ref["referral_count"]
+            if count == 10:
+                await context.bot.send_message(
+                    chat_id=referred_by,
+                    text="🎉 Tabriklaymiz! 10 ta do'st taklif qildingiz!\n⭐ Standard tarif 15 kunga berildi!"
+                )
+            elif count == 30:
+                await context.bot.send_message(
+                    chat_id=referred_by,
+                    text="🎉 Tabriklaymiz! 30 ta do'st taklif qildingiz!\n💎 Premium tarif 15 kunga berildi!"
+                )
+        except:
+            pass
     u = get_user(user.id)
     plan = u["plan"].upper()
     plan_emoji = {"FREE": "🆓", "STANDARD": "⭐", "PREMIUM": "💎"}.get(plan, "🆓")
@@ -347,10 +402,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 /cv — Write CV\n"
         f"📧 /email — Write email\n"
         f"📱 /post — Marketing post\n"
-        f"🔊 /ai_sound — AI Voice (Standard+)\n\n"
+        f"🔊 /ai_sound — AI Voice (Standard+)\n"
+        f"👥 /referral — Invite friends & earn bonuses\n\n"
         f"💰 /updateplan — Update plan\n"
         f"/help — Help\n"
         f"/reset — Clear history"
+    )
+
+async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    code = u["referral_code"]
+    count = u["referral_count"]
+    bot = await context.bot.get_me()
+    link = f"https://t.me/{bot.username}?start={code}"
+    await update.message.reply_text(
+        f"👥 Referral Program\n"
+        f"{'─' * 28}\n\n"
+        f"🔗 Your invite link:\n{link}\n\n"
+        f"📊 Invited: {count} friends\n\n"
+        f"🎁 Rewards:\n"
+        f"• 10 friends → ⭐ Standard 15 days FREE\n"
+        f"• 30-50 friends → 💎 Premium 15 days FREE\n\n"
+        f"Share this link with your friends! 🚀"
     )
 
 async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -438,10 +513,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         days = 30 if plan != "free" else None
         set_plan(target_id, plan, days)
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
-        await query.message.edit_text(
-            f"✅ Done!\n"
-            f"User {target_id} → {plan_emoji[plan]} {plan.upper()}"
-        )
+        await query.message.edit_text(f"✅ Done!\nUser {target_id} → {plan_emoji[plan]} {plan.upper()}")
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -506,39 +578,27 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c = conn.cursor()
         c.execute("""
             SELECT user_id, username, plan, is_blocked
-            FROM users
-            ORDER BY
-                CASE plan
-                    WHEN 'premium' THEN 1
-                    WHEN 'standard' THEN 2
-                    ELSE 3
-                END,
+            FROM users ORDER BY
+                CASE plan WHEN 'premium' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END,
                 joined_at DESC
         """)
         rows = c.fetchall()
         conn.close()
-
         if not rows:
             await update.message.reply_text("No users yet.")
             return
-
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
         text = f"👥 All Users: {len(rows)}\n{'═' * 30}\n\n"
-
         for row in rows:
             uid, username, plan, is_blocked = row
             uname = f"@{username}" if username else "no_username"
             blocked = " 🚫" if is_blocked else ""
-            emoji = plan_emoji.get(plan, "🆓")
-            text += f"{emoji} Username: {uname}    ID: {uid}{blocked}\n"
-
+            text += f"{plan_emoji.get(plan,'🆓')} {uname}    {uid}{blocked}\n"
         if len(text) > 4000:
-            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
-            for part in parts:
+            for part in [text[i:i+4000] for i in range(0, len(text), 4000)]:
                 await update.message.reply_text(part)
         else:
             await update.message.reply_text(text)
-
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
@@ -553,49 +613,35 @@ async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(context.args[0])
         conn = get_conn()
         c = conn.cursor()
-        c.execute("""
-            SELECT plan, expires_at, is_blocked, full_name, username 
-            FROM users WHERE user_id = %s
-        """, (target_id,))
+        c.execute("SELECT plan, expires_at, is_blocked, full_name, username FROM users WHERE user_id = %s", (target_id,))
         row = c.fetchone()
         conn.close()
-
         if not row:
             await update.message.reply_text(f"❌ User {target_id} not found!")
             return
-
         plan, expires_at, is_blocked, full_name, username = row
         expires = expires_at.strftime("%d.%m.%Y") if expires_at else "—"
-        status = "🚫 Blocked" if is_blocked else "✅ Active"
-        uname = f"@{username}" if username else "—"
-        name = full_name or "—"
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
-
         keyboard = [
             [
                 InlineKeyboardButton("🆓 Free", callback_data=f"ap_setplan_{target_id}_free"),
                 InlineKeyboardButton("⭐ Standard", callback_data=f"ap_setplan_{target_id}_standard"),
                 InlineKeyboardButton("💎 Premium", callback_data=f"ap_setplan_{target_id}_premium"),
             ],
-            [
-                InlineKeyboardButton(
-                    "✅ Unblock" if is_blocked else "🚫 Block",
-                    callback_data=f"ap_unblock_{target_id}" if is_blocked else f"ap_block_{target_id}"
-                )
-            ]
+            [InlineKeyboardButton(
+                "✅ Unblock" if is_blocked else "🚫 Block",
+                callback_data=f"ap_unblock_{target_id}" if is_blocked else f"ap_block_{target_id}"
+            )]
         ]
-
         await update.message.reply_text(
-            f"👤 User Info\n"
-            f"{'─' * 25}\n"
+            f"👤 User Info\n{'─' * 25}\n"
             f"🆔 ID: {target_id}\n"
-            f"👤 Name: {name}\n"
-            f"📱 Username: {uname}\n"
-            f"📋 Plan: {plan_emoji.get(plan, '🆓')} {plan.upper()}\n"
+            f"👤 Name: {full_name or '—'}\n"
+            f"📱 Username: @{username if username else '—'}\n"
+            f"📋 Plan: {plan_emoji.get(plan,'🆓')} {plan.upper()}\n"
             f"📅 Expires: {expires}\n"
-            f"🔰 Status: {status}\n"
-            f"{'─' * 25}\n"
-            f"Select action:",
+            f"🔰 Status: {'🚫 Blocked' if is_blocked else '✅ Active'}\n"
+            f"{'─' * 25}\nSelect action:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     except ValueError:
@@ -638,6 +684,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/post — Marketing post\n"
         "/biznes — Business plan\n"
         "/ai_sound — AI Voice 🔊 ⭐\n"
+        "/referral — Invite friends & earn bonuses 👥\n"
         "/updateplan — Plans & pricing\n"
         "/reset — Clear chat history\n"
         "/help — Help\n\n"
@@ -836,23 +883,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     ensure_user(user_id, user.username, user.full_name)
     u = get_user(user_id)
-
     if u["is_blocked"]:
         await update.message.reply_text("🚫 You are blocked. Contact admin.")
         return
-
     limits = get_limits(u["plan"])
     if not check_limit(user_id, "chat", limits["chat"]):
         keyboard = [[InlineKeyboardButton("💰 Upgrade Plan", callback_data="buy_standard")]]
         await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
-
     user_text = update.message.text
     memory = get_memory(user_id)
     memory_context = ""
     if memory and (memory.get("name") or memory.get("facts")):
         memory_context = f"User info — name: {memory['name']}, facts: {memory['facts']}. "
-
     if user_id not in user_histories:
         user_histories[user_id] = [{"role": "system", "content": (
             "You are a professional AI assistant. "
@@ -875,17 +918,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Keep answers short, clear and natural. "
             + memory_context
         )
-
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
     try:
         if needs_search(user_text) and limits["search"] != 0:
             search_results = tavily.search(query=user_text, max_results=3)
             search_content = "\n\n".join([f"Source: {r['url']}\n{r['content']}" for r in search_results.get("results", [])])
-            message_content = f"User question: {user_text}\n\nWeb results:\n{search_content}\n\nGive a clear answer in the same language as the user's question."
+            message_content = f"User question: {user_text}\n\nWeb results:\n{search_content}\n\nAnswer in the same language as the question."
         else:
             message_content = user_text
-
         user_histories[user_id].append({"role": "user", "content": message_content})
         response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=user_histories[user_id])
         reply = response.choices[0].message.content
@@ -989,7 +1029,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption = update.message.caption or "Summarize this document and explain the key points."
         if user_id not in user_histories:
             user_histories[user_id] = [{"role": "system", "content": "You are a professional AI assistant. Always reply in the same language the user writes in."}]
-        user_histories[user_id].append({"role": "user", "content": f"PDF:\n\n{text}\n\nRequest: {caption}"}),
+        user_histories[user_id].append({"role": "user", "content": f"PDF:\n\n{text}\n\nRequest: {caption}"})
         response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=user_histories[user_id])
         reply = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": reply})
@@ -1009,6 +1049,7 @@ async def post_init(app):
         BotCommand("post", "Marketing post"),
         BotCommand("biznes", "Business plan"),
         BotCommand("ai_sound", "AI Voice (Standard+)"),
+        BotCommand("referral", "Invite friends & earn bonuses"),
         BotCommand("reset", "Clear history"),
         BotCommand("help", "Help"),
     ])
@@ -1024,6 +1065,7 @@ def main():
     app.add_handler(CommandHandler("post", post_command))
     app.add_handler(CommandHandler("biznes", biznes_command))
     app.add_handler(CommandHandler("ai_sound", handle_tts))
+    app.add_handler(CommandHandler("referral", referral_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin_command))
