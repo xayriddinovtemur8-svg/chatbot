@@ -12,12 +12,13 @@ from tavily import TavilyClient
 from dotenv import load_dotenv
 from gtts import gTTS
 from langdetect import detect
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
     CommandHandler,
     CallbackQueryHandler,
+    PreCheckoutQueryHandler,
     filters,
     ContextTypes
 )
@@ -35,6 +36,7 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 HF_TOKEN = os.getenv("HF_TOKEN")
 CARD_NUMBER = os.getenv("CARD_NUMBER")
+PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "")
 
 ADMIN_ID = 8230883785
 ADMIN_USERNAME = "temur_uzb7779"
@@ -58,20 +60,11 @@ GTTS_LANG_MAP = {
 }
 
 LANGUAGES = {
-    "en": "🇬🇧 English",
-    "ru": "🇷🇺 Russian",
-    "uz": "🇺🇿 Uzbek",
-    "tr": "🇹🇷 Turkish",
-    "de": "🇩🇪 German",
-    "fr": "🇫🇷 French",
-    "es": "🇪🇸 Spanish",
-    "ar": "🇸🇦 Arabic",
-    "ko": "🇰🇷 Korean",
-    "ja": "🇯🇵 Japanese",
-    "zh": "🇨🇳 Chinese",
-    "it": "🇮🇹 Italian",
-    "pt": "🇵🇹 Portuguese",
-    "hi": "🇮🇳 Hindi",
+    "en": "🇬🇧 English", "ru": "🇷🇺 Russian", "uz": "🇺🇿 Uzbek",
+    "tr": "🇹🇷 Turkish", "de": "🇩🇪 German", "fr": "🇫🇷 French",
+    "es": "🇪🇸 Spanish", "ar": "🇸🇦 Arabic", "ko": "🇰🇷 Korean",
+    "ja": "🇯🇵 Japanese", "zh": "🇨🇳 Chinese", "it": "🇮🇹 Italian",
+    "pt": "🇵🇹 Portuguese", "hi": "🇮🇳 Hindi",
 }
 
 def detect_lang(text):
@@ -115,9 +108,25 @@ def init_db():
             claimed_standard BOOLEAN DEFAULT FALSE,
             claimed_premium BOOLEAN DEFAULT FALSE,
             language TEXT DEFAULT 'en',
+            trial_used BOOLEAN DEFAULT FALSE,
             last_reset DATE DEFAULT CURRENT_DATE
         )
     """)
+    # Add missing columns if they don't exist
+    for col, definition in [
+        ("language", "TEXT DEFAULT 'en'"),
+        ("trial_used", "BOOLEAN DEFAULT FALSE"),
+        ("referral_code", "TEXT"),
+        ("referred_by", "BIGINT"),
+        ("referral_count", "INTEGER DEFAULT 0"),
+        ("claimed_standard", "BOOLEAN DEFAULT FALSE"),
+        ("claimed_premium", "BOOLEAN DEFAULT FALSE"),
+    ]:
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {definition}")
+            conn.commit()
+        except:
+            conn.rollback()
     c.execute("""
         CREATE TABLE IF NOT EXISTS user_memory (
             user_id BIGINT PRIMARY KEY,
@@ -148,18 +157,29 @@ def init_db():
     conn.commit()
     conn.close()
 
+def is_new_user(user_id):
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
+        row = c.fetchone()
+        conn.close()
+        return not row
+    except:
+        return False
+
 def ensure_user(user_id, username=None, full_name=None, referred_by=None):
     try:
         conn = get_conn()
         c = conn.cursor()
         code = generate_referral_code()
         c.execute("""
-            INSERT INTO users (user_id, username, full_name, referral_code, referred_by)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO users (user_id, username, full_name, referral_code, referred_by, plan, expires_at, trial_used)
+            VALUES (%s, %s, %s, %s, %s, 'standard', %s, TRUE)
             ON CONFLICT (user_id) DO UPDATE SET
                 username = EXCLUDED.username,
                 full_name = EXCLUDED.full_name
-        """, (user_id, username, full_name, code, referred_by))
+        """, (user_id, username, full_name, code, referred_by, datetime.now() + timedelta(days=3)))
         conn.commit()
         if referred_by:
             c.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = %s", (referred_by,))
@@ -174,7 +194,7 @@ def get_user(user_id):
         c = conn.cursor()
         c.execute("""
             SELECT plan, expires_at, is_blocked, full_name, username,
-                   referral_code, referral_count, claimed_standard, claimed_premium, language
+                   referral_code, referral_count, claimed_standard, claimed_premium, language, trial_used
             FROM users WHERE user_id = %s
         """, (user_id,))
         row = c.fetchone()
@@ -182,28 +202,25 @@ def get_user(user_id):
         if not row:
             return {"plan": "free", "expires_at": None, "is_blocked": False,
                     "full_name": None, "username": None, "referral_code": None,
-                    "referral_count": 0, "claimed_standard": False, "claimed_premium": False, "language": "en"}
-        plan, expires_at, is_blocked, full_name, username, referral_code, referral_count, claimed_standard, claimed_premium, language = row
+                    "referral_count": 0, "claimed_standard": False, "claimed_premium": False,
+                    "language": "en", "trial_used": False}
+        plan, expires_at, is_blocked, full_name, username, referral_code, referral_count, claimed_standard, claimed_premium, language, trial_used = row
         if expires_at and datetime.now() > expires_at and plan != 'free':
             set_plan(user_id, "free", None)
             plan = "free"
             expires_at = None
         return {
-            "plan": plan,
-            "expires_at": expires_at,
-            "is_blocked": is_blocked,
-            "full_name": full_name,
-            "username": username,
-            "referral_code": referral_code,
-            "referral_count": referral_count or 0,
-            "claimed_standard": claimed_standard or False,
-            "claimed_premium": claimed_premium or False,
-            "language": language or "en"
+            "plan": plan, "expires_at": expires_at, "is_blocked": is_blocked,
+            "full_name": full_name, "username": username, "referral_code": referral_code,
+            "referral_count": referral_count or 0, "claimed_standard": claimed_standard or False,
+            "claimed_premium": claimed_premium or False, "language": language or "en",
+            "trial_used": trial_used or False
         }
     except:
         return {"plan": "free", "expires_at": None, "is_blocked": False,
                 "full_name": None, "username": None, "referral_code": None,
-                "referral_count": 0, "claimed_standard": False, "claimed_premium": False, "language": "en"}
+                "referral_count": 0, "claimed_standard": False, "claimed_premium": False,
+                "language": "en", "trial_used": False}
 
 def set_plan(user_id, plan, days=30):
     try:
@@ -297,14 +314,12 @@ def get_limits(plan):
     elif plan == "standard":
         return {
             "chat": 30, "search": 30, "image": 30, "post": 30, "biznes": 30,
-            "pdf": 30, "cv": 30, "email": 30, "voice": 0, "pptx": 0, "word": 0,
-            "tts": 30
+            "pdf": 30, "cv": 30, "email": 30, "voice": 0, "pptx": 0, "word": 0, "tts": 30
         }
     else:
         return {
             "chat": 20, "search": 20, "image": 20, "post": 20, "biznes": 20,
-            "pdf": 0, "cv": 0, "email": 0, "voice": 0, "pptx": 0, "word": 0,
-            "tts": 0
+            "pdf": 0, "cv": 0, "email": 0, "voice": 0, "pptx": 0, "word": 0, "tts": 0
         }
 
 def get_memory(user_id):
@@ -419,9 +434,39 @@ Min 5 slides. Same language as topic."""
 Min 4 sections. Same language as topic."""
     return await ai_generate(prompt)
 
+# ========== CHECK EXPIRING PLANS ==========
+async def check_expiring_plans(context):
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        soon = datetime.now() + timedelta(days=3)
+        c.execute("""
+            SELECT user_id, plan, expires_at FROM users
+            WHERE plan != 'free' AND expires_at IS NOT NULL
+            AND expires_at BETWEEN NOW() AND %s
+        """, (soon,))
+        rows = c.fetchall()
+        conn.close()
+        for row in rows:
+            user_id, plan, expires_at = row
+            days_left = (expires_at - datetime.now()).days + 1
+            plan_emoji = {"standard": "⭐", "premium": "💎"}.get(plan, "")
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"⚠️ Your {plan_emoji} {plan.upper()} plan expires in {days_left} day(s)!\n\n"
+                         f"Renew now to keep your benefits:\n/updateplan"
+                )
+            except:
+                pass
+    except:
+        pass
+
+# ========== START ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     referred_by = None
+    new_user = is_new_user(user.id)
     if context.args:
         try:
             ref_code = context.args[0]
@@ -438,9 +483,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = get_user(user.id)
     plan = u["plan"].upper()
     plan_emoji = {"FREE": "🆓", "STANDARD": "⭐", "PREMIUM": "💎"}.get(plan, "🆓")
+    trial_msg = ""
+    if new_user:
+        trial_msg = "\n\n🎁 Welcome gift: 3 days FREE Standard plan activated! ⭐"
     await update.message.reply_text(
         f"Hello! I am Chatbot 🤖\n"
-        f"Your plan: {plan_emoji} {plan}\n\n"
+        f"Your plan: {plan_emoji} {plan}{trial_msg}\n\n"
         f"💬 Chat with me\n"
         f"🌐 Current news, prices, weather\n"
         f"📄 Send PDF to analyze\n"
@@ -454,11 +502,57 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔊 /ai_sound — AI Voice (Standard+)\n"
         f"👥 /referral — Invite friends & earn bonuses\n"
         f"🌍 /language — Change language\n"
-        f"⭐ /feedback — Rate the bot\n\n"
+        f"⭐ /feedback — Rate the bot\n"
+        f"📊 /stats — My statistics\n\n"
         f"💰 /updateplan — Update plan\n"
         f"/help — Help\n"
         f"/reset — Clear history"
     )
+
+# ========== STATS ==========
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("""
+            SELECT plan, expires_at, usage_chat, usage_search, usage_image,
+                   usage_post, usage_biznes, usage_pdf, usage_cv, usage_email,
+                   usage_tts, joined_at, referral_count
+            FROM users WHERE user_id = %s
+        """, (user.id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            await update.message.reply_text("No stats yet.")
+            return
+        plan, expires_at, chat, search, image, post, biznes, pdf, cv, email, tts, joined_at, referrals = row
+        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}.get(plan, "🆓")
+        expires = expires_at.strftime("%d.%m.%Y") if expires_at else "—"
+        joined = joined_at.strftime("%d.%m.%Y") if joined_at else "—"
+        await update.message.reply_text(
+            f"📊 My Statistics\n"
+            f"{'═' * 28}\n\n"
+            f"👤 {user.full_name or user.username}\n"
+            f"📅 Joined: {joined}\n"
+            f"📋 Plan: {plan_emoji} {plan.upper()}\n"
+            f"⏰ Expires: {expires}\n"
+            f"👥 Referrals: {referrals or 0}\n\n"
+            f"{'─' * 28}\n"
+            f"📈 Today's usage:\n"
+            f"💬 Chat: {chat}\n"
+            f"🌐 Search: {search}\n"
+            f"🖼️ Image: {image}\n"
+            f"📄 PDF: {pdf}\n"
+            f"📱 Post: {post}\n"
+            f"💼 Business: {biznes}\n"
+            f"👤 CV: {cv}\n"
+            f"📧 Email: {email}\n"
+            f"🔊 Voice: {tts}"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
 
 # ========== LANGUAGE ==========
 async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -538,6 +632,8 @@ async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard = [
         [InlineKeyboardButton("⭐ Buy Standard — 5 USDT/month", callback_data="buy_standard")],
         [InlineKeyboardButton("💎 Buy Premium — 10 USDT/month", callback_data="buy_premium")],
+        [InlineKeyboardButton("⭐ Pay Standard via Stars (250⭐)", callback_data="stars_standard")],
+        [InlineKeyboardButton("💎 Pay Premium via Stars (500⭐)", callback_data="stars_premium")],
     ]
     await update.message.reply_text(
         f"💰 Plans & Pricing\n"
@@ -575,24 +671,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     username = query.from_user.username
 
-    # ---- LANGUAGE ----
     if data.startswith("setlang_"):
         lang = data.split("_")[1]
         set_language(user_id, lang)
         lang_name = LANGUAGES.get(lang, lang)
         await query.message.edit_text(f"✅ Language changed to {lang_name}!")
 
-    # ---- FEEDBACK RATING ----
     elif data.startswith("feedback_"):
         rating = int(data.split("_")[1])
         context.user_data['feedback_rating'] = rating
         context.user_data['mode'] = 'feedback_comment'
         stars = "⭐" * rating
         await query.message.edit_text(
-            f"You rated: {stars}\n\nNow write a short comment (or send /skip to skip):"
+            f"You rated: {stars}\n\nWrite a short comment (or type /skip):"
         )
 
-    # ---- CLAIM REFERRAL ----
     elif data == "claim_standard":
         u = get_user(user_id)
         if u["referral_count"] >= 10 and not u["claimed_standard"]:
@@ -651,13 +744,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+    elif data == "stars_standard":
+        await context.bot.send_invoice(
+            chat_id=user_id,
+            title="⭐ Standard Plan — 1 month",
+            description="30 days Standard plan with all features",
+            payload="standard_30",
+            currency="XTR",
+            prices=[LabeledPrice("Standard Plan", 250)],
+            provider_token=""
+        )
+
+    elif data == "stars_premium":
+        await context.bot.send_invoice(
+            chat_id=user_id,
+            title="💎 Premium Plan — 1 month",
+            description="30 days Premium plan with unlimited features",
+            payload="premium_30",
+            currency="XTR",
+            prices=[LabeledPrice("Premium Plan", 500)],
+            provider_token=""
+        )
+
     elif data.startswith("ap_setplan_"):
         parts = data.split("_")
         target_id = int(parts[2])
         plan = parts[3]
         days = 30 if plan != "free" else None
         set_plan(target_id, plan, days)
-        # Save payment history
         amount = "5 USDT" if plan == "standard" else ("10 USDT" if plan == "premium" else "0")
         add_payment(target_id, username, plan, amount)
         plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
@@ -679,6 +793,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(data.split("_")[2])
         set_blocked(target_id, False)
         await query.message.edit_text(f"✅ User {target_id} has been unblocked!")
+
+# ========== STARS PAYMENT ==========
+async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    payload = update.message.successful_payment.invoice_payload
+    if payload == "standard_30":
+        set_plan(user_id, "standard", 30)
+        add_payment(user_id, username, "standard", "250 Stars")
+        await update.message.reply_text("🎉 Payment successful!\n⭐ Standard plan activated for 30 days!")
+    elif payload == "premium_30":
+        set_plan(user_id, "premium", 30)
+        add_payment(user_id, username, "premium", "500 Stars")
+        await update.message.reply_text("🎉 Payment successful!\n💎 Premium plan activated for 30 days!")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -720,12 +852,57 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Commands:\n"
         f"/users — All users list\n"
         f"/find [user\\_id] — Manage user\n"
+        f"/search\\_user @username — Find by username\n"
         f"/payments — Payment history\n"
         f"/feedbacks — All feedbacks\n"
         f"/broadcast [text] — Message all"
     )
 
-# ========== PAYMENTS HISTORY ==========
+async def search_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!")
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /search_user @username")
+        return
+    username = context.args[0].replace("@", "")
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT user_id, username, plan, expires_at, is_blocked, full_name FROM users WHERE username ILIKE %s", (username,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            await update.message.reply_text(f"❌ User @{username} not found!")
+            return
+        uid, uname, plan, expires_at, is_blocked, full_name = row
+        expires = expires_at.strftime("%d.%m.%Y") if expires_at else "—"
+        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
+        keyboard = [
+            [
+                InlineKeyboardButton("🆓 Free", callback_data=f"ap_setplan_{uid}_free"),
+                InlineKeyboardButton("⭐ Standard", callback_data=f"ap_setplan_{uid}_standard"),
+                InlineKeyboardButton("💎 Premium", callback_data=f"ap_setplan_{uid}_premium"),
+            ],
+            [InlineKeyboardButton(
+                "✅ Unblock" if is_blocked else "🚫 Block",
+                callback_data=f"ap_unblock_{uid}" if is_blocked else f"ap_block_{uid}"
+            )]
+        ]
+        await update.message.reply_text(
+            f"👤 User Found\n{'─' * 25}\n"
+            f"🆔 ID: {uid}\n"
+            f"👤 Name: {full_name or '—'}\n"
+            f"📱 Username: @{uname or '—'}\n"
+            f"📋 Plan: {plan_emoji.get(plan,'🆓')} {plan.upper()}\n"
+            f"📅 Expires: {expires}\n"
+            f"🔰 Status: {'🚫 Blocked' if is_blocked else '✅ Active'}\n"
+            f"{'─' * 25}\nSelect action:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {str(e)}")
+
 async def payments_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Access denied!")
@@ -754,7 +931,6 @@ async def payments_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error: {str(e)}")
 
-# ========== FEEDBACKS ==========
 async def feedbacks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Access denied!")
@@ -899,6 +1075,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/referral — Invite friends & earn bonuses 👥\n"
         "/language — Change language 🌍\n"
         "/feedback — Rate the bot ⭐\n"
+        "/stats — My statistics 📊\n"
         "/updateplan — Plans & pricing\n"
         "/reset — Clear chat history\n"
         "/help — Help\n\n"
@@ -914,8 +1091,7 @@ async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     if get_limits(u["plan"])["pptx"] == 0:
         keyboard = [[InlineKeyboardButton("💎 Upgrade to Premium", callback_data="buy_premium")]]
         await update.message.reply_text("💎 PowerPoint requires Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -930,8 +1106,7 @@ async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content_str = content_str.strip()
         if "```" in content_str:
             content_str = content_str.split("```")[1]
-            if content_str.startswith("json"):
-                content_str = content_str[4:]
+            if content_str.startswith("json"): content_str = content_str[4:]
         content = json.loads(content_str)
         path = create_pptx(content["title"], content["slides"])
         with open(path, "rb") as f:
@@ -944,8 +1119,7 @@ async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     if get_limits(u["plan"])["word"] == 0:
         keyboard = [[InlineKeyboardButton("💎 Upgrade to Premium", callback_data="buy_premium")]]
         await update.message.reply_text("💎 Word requires Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -960,8 +1134,7 @@ async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content_str = content_str.strip()
         if "```" in content_str:
             content_str = content_str.split("```")[1]
-            if content_str.startswith("json"):
-                content_str = content_str[4:]
+            if content_str.startswith("json"): content_str = content_str[4:]
         content = json.loads(content_str)
         path = create_docx(content["title"], content["sections"])
         with open(path, "rb") as f:
@@ -974,8 +1147,7 @@ async def cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     limits = get_limits(u["plan"])
     if limits["cv"] == 0:
         keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
@@ -999,8 +1171,7 @@ async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     limits = get_limits(u["plan"])
     if limits["email"] == 0:
         keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
@@ -1024,8 +1195,7 @@ async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     limits = get_limits(u["plan"])
     if not check_limit(user.id, "post", limits["post"]):
         await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.")
@@ -1045,8 +1215,7 @@ async def biznes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     limits = get_limits(u["plan"])
     if not check_limit(user.id, "biznes", limits["biznes"]):
         await update.message.reply_text("❌ Daily limit reached! Use /updateplan to upgrade.")
@@ -1067,8 +1236,7 @@ async def handle_tts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     ensure_user(user_id, user.username, user.full_name)
     u = get_user(user_id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     limits = get_limits(u["plan"])
     if limits.get("tts") == 0:
         keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
@@ -1101,7 +1269,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 You are blocked. Contact admin.")
         return
 
-    # ---- FEEDBACK COMMENT ----
     if context.user_data.get('mode') == 'feedback_comment':
         context.user_data['mode'] = None
         rating = context.user_data.get('feedback_rating', 5)
@@ -1128,7 +1295,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_text = update.message.text
-    user_lang = u.get("language", "en")
     memory = get_memory(user_id)
     memory_context = ""
     if memory and (memory.get("name") or memory.get("facts")):
@@ -1136,25 +1302,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in user_histories:
         user_histories[user_id] = [{"role": "system", "content": (
-            f"You are a professional AI assistant. "
-            f"VERY IMPORTANT: Always reply in the SAME language the user uses in their message. "
-            f"If user writes in Uzbek, reply in Uzbek. "
-            f"If user writes in English, reply in English. "
-            f"If user writes in Russian, reply in Russian. "
-            f"Never switch languages on your own. "
-            f"Keep answers short, clear and natural. "
-            + memory_context
+            "You are a professional AI assistant. "
+            "VERY IMPORTANT: Always reply in the SAME language the user uses in their message. "
+            "Never switch languages on your own. "
+            "Keep answers short, clear and natural. " + memory_context
         )}]
     else:
         user_histories[user_id][0]["content"] = (
-            f"You are a professional AI assistant. "
-            f"VERY IMPORTANT: Always reply in the SAME language the user uses in their message. "
-            f"If user writes in Uzbek, reply in Uzbek. "
-            f"If user writes in English, reply in English. "
-            f"If user writes in Russian, reply in Russian. "
-            f"Never switch languages on your own. "
-            f"Keep answers short, clear and natural. "
-            + memory_context
+            "You are a professional AI assistant. "
+            "VERY IMPORTANT: Always reply in the SAME language the user uses in their message. "
+            "Never switch languages on your own. "
+            "Keep answers short, clear and natural. " + memory_context
         )
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
@@ -1178,8 +1336,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     ensure_user(user_id, user.username, user.full_name)
     u = get_user(user_id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     if get_limits(u["plan"])["voice"] == 0:
         keyboard = [[InlineKeyboardButton("💎 Upgrade to Premium", callback_data="buy_premium")]]
         await update.message.reply_text("💎 Voice requires Premium!\nUse /updateplan to upgrade.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1209,8 +1366,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     ensure_user(user_id, user.username, user.full_name)
     u = get_user(user_id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     limits = get_limits(u["plan"])
     if not check_limit(user_id, "image", limits["image"]):
         keyboard = [[InlineKeyboardButton("💰 Upgrade Plan", callback_data="buy_standard")]]
@@ -1237,8 +1393,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     ensure_user(user_id, user.username, user.full_name)
     u = get_user(user_id)
-    if u["is_blocked"]:
-        return
+    if u["is_blocked"]: return
     limits = get_limits(u["plan"])
     if limits["pdf"] == 0:
         keyboard = [[InlineKeyboardButton("⭐ Upgrade to Standard", callback_data="buy_standard")]]
@@ -1277,9 +1432,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app):
     init_db()
+    # Har 12 soatda muddati tugayotganlarni tekshirish
+    app.job_queue.run_repeating(check_expiring_plans, interval=43200, first=60)
     await app.bot.set_my_commands([
         BotCommand("start", "Start the bot"),
         BotCommand("updateplan", "Plans & pricing"),
+        BotCommand("stats", "My statistics"),
         BotCommand("pptx", "PowerPoint (Premium)"),
         BotCommand("word", "Word document (Premium)"),
         BotCommand("cv", "Write CV (Standard+)"),
@@ -1298,6 +1456,7 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("updateplan", updateplan_command))
+    app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("pptx", pptx_command))
     app.add_handler(CommandHandler("word", word_command))
     app.add_handler(CommandHandler("cv", cv_command))
@@ -1313,10 +1472,13 @@ def main():
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("find", find_command))
     app.add_handler(CommandHandler("users", users_command))
+    app.add_handler(CommandHandler("search_user", search_user_command))
     app.add_handler(CommandHandler("payments", payments_command))
     app.add_handler(CommandHandler("feedbacks", feedbacks_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_image))
