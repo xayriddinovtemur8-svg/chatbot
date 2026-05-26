@@ -770,14 +770,10 @@ Min 4 sections. Same language as topic."""
 
 async def generate_image_gemini(prompt):
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash-preview-image-generation")
-        response = model.generate_content(
-            f"Generate an image: {prompt}",
-            generation_config=genai.GenerationConfig(response_modalities=["image", "text"])
-        )
-        for part in response.candidates[0].content.parts:
-            if hasattr(part, 'inline_data') and part.inline_data:
-                return part.inline_data.data
+        url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(prompt)}?width=1024&height=1024&nologo=true"
+        response = requests.get(url, timeout=60)
+        if response.status_code == 200:
+            return response.content
         return None
     except Exception as e:
         raise e
