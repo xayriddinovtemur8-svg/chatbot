@@ -1,26 +1,24 @@
+cat > /home/claude/bot.py << 'ENDOFFILE'
 import os
 import io
-import requests
-import fitz
+import re
 import json
-import psycopg2
 import random
 import string
+import requests
+import psycopg2
+import fitz
 from datetime import datetime, timedelta, date
 from groq import Groq
-from tavily import TavilyClient
 from dotenv import load_dotenv
 from gtts import gTTS
 from langdetect import detect
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram import (
+    Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+)
 from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    CommandHandler,
-    CallbackQueryHandler,
-    PreCheckoutQueryHandler,
-    filters,
-    ContextTypes
+    ApplicationBuilder, MessageHandler, CommandHandler,
+    CallbackQueryHandler, PreCheckoutQueryHandler, filters, ContextTypes
 )
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -30,1103 +28,1477 @@ from docx.shared import Pt as DocPt, RGBColor as DocRGB
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-DATABASE_URL = os.getenv("DATABASE_URL")
-CARD_NUMBER = os.getenv("CARD_NUMBER")
+# ═══════════════════════════════════════════════════════════
+#                     CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY      = os.getenv("GROQ_API_KEY")
+DATABASE_URL      = os.getenv("DATABASE_URL")
+CARD_NUMBER       = os.getenv("CARD_NUMBER")
+WEATHER_API_KEY   = os.getenv("WEATHER_API_KEY")
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
 
-ADMIN_ID = 8230883785
+ADMIN_ID       = 8230883785
 ADMIN_USERNAME = "temur_uzb7779"
+BOT_NAME       = "ChatBot Pro"
 
+# Pricing
 STARS_STANDARD = 770
-STARS_PREMIUM = 1150
-STARS_GROUP = 8547
-STARS_IMAGINE = 50
+STARS_PREMIUM  = 1150
+STARS_GROUP    = 8547
+STARS_IMAGINE  = 50
+USDT_STANDARD  = 10
+USDT_PREMIUM   = 15
 
-COINS_PER_MESSAGE = 5
+# Coins
+COINS_PER_MSG  = 5
 COINS_STANDARD = 10000
-COINS_PREMIUM = 100000
-AFFILIATE_PERCENT = 25
-MAX_WARNINGS = 10
+COINS_PREMIUM  = 100000
+AFFILIATE_PCT  = 25
+MAX_WARNINGS   = 10
 
+# ═══════════════════════════════════════════════════════════
+#                     CONSTANTS
+# ═══════════════════════════════════════════════════════════
 BAD_WORDS = [
-    "ублюдок", "сука", "пизда", "хуй", "мудак", "залупа", "пиздец", "блядь", "ёбаный",
-    "stupid", "idiot", "fuck", "shit", "asshole", "bitch", "bastard", "dick", "cunt",
-    "ahmoq", "tentak", "befayz", "harom", "yaramas", "eshak", "cho'chqa",
-    "go'rso'tar", "haromzoda", "onangni", "otangni", "adminni", "egangni"
+    "ублюдок","сука","пизда","хуй","мудак","залупа","пиздец","блядь","ёбаный",
+    "fuck","shit","asshole","bitch","bastard","dick","cunt","idiot","stupid",
+    "ahmoq","tentak","yaramas","eshak","haromzoda","onangni","otangni","egangni",
+    "cho'chqa","go'rso'tar","adminni","seni o'ldir"
 ]
 
-client = Groq(api_key=GROQ_API_KEY)
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
-
-user_histories = {}
-
 SEARCH_KEYWORDS = [
-    "today", "now", "current", "latest", "news", "price", "rate", "weather",
-    "bugun", "hozir", "narx", "kurs", "yangilik", "ob-havo", "oxirgi",
-    "сегодня", "сейчас", "курс", "цена", "новости"
+    "today","now","current","latest","news","price","rate",
+    "bugun","hozir","narx","kurs","yangilik","ob-havo","oxirgi",
+    "сегодня","сейчас","курс","цена","новости","погода"
 ]
 
 GTTS_LANG_MAP = {
-    "uz": "ru", "en": "en", "ru": "ru", "tr": "tr", "de": "de",
-    "fr": "fr", "es": "es", "ar": "ar", "ko": "ko", "ja": "ja",
-    "zh-cn": "zh-CN", "zh-tw": "zh-TW", "it": "it", "pt": "pt", "hi": "hi"
+    "uz":"ru","en":"en","ru":"ru","tr":"tr","de":"de","fr":"fr",
+    "es":"es","ar":"ar","ko":"ko","ja":"ja","zh-cn":"zh-CN",
+    "zh-tw":"zh-TW","it":"it","pt":"pt","hi":"hi"
 }
 
 LANGUAGES = {
-    "en": ("🇬🇧", "English"), "ru": ("🇷🇺", "Russian"), "uz": ("🇺🇿", "Uzbek"),
-    "tr": ("🇹🇷", "Turkish"), "de": ("🇩🇪", "German"), "fr": ("🇫🇷", "French"),
-    "es": ("🇪🇸", "Spanish"), "ar": ("🇸🇦", "Arabic"), "ko": ("🇰🇷", "Korean"),
-    "ja": ("🇯🇵", "Japanese"), "zh": ("🇨🇳", "Chinese"), "it": ("🇮🇹", "Italian"),
-    "pt": ("🇵🇹", "Portuguese"), "hi": ("🇮🇳", "Hindi"),
+    "en":("🇬🇧","English"),  "ru":("🇷🇺","Русский"),  "uz":("🇺🇿","O'zbek"),
+    "tr":("🇹🇷","Türkçe"),   "de":("🇩🇪","Deutsch"),  "fr":("🇫🇷","Français"),
+    "es":("🇪🇸","Español"),  "ar":("🇸🇦","العربية"),  "ko":("🇰🇷","한국어"),
+    "ja":("🇯🇵","日本語"),   "zh":("🇨🇳","中文"),      "it":("🇮🇹","Italiano"),
+    "pt":("🇵🇹","Português"),"hi":("🇮🇳","हिंदी"),
 }
 
-TEXTS = {
-    "en": {
-        "welcome": "Hello! I am Chatbot 🤖\nYour plan: {plan_emoji} {plan}\n🪙 Coins: {coins}\n\n💬 Chat with me\n🌐 News, prices, weather\n📄 PDF analyze\n🖼️ Send image\n🎤 Voice message\n\n📊 /pptx — PowerPoint 💎\n📝 /word — Word 💎\n👤 /cv — CV ⭐\n📧 /email — Email ⭐\n📱 /post — Marketing post\n🔊 /ai_sound — AI Voice ⭐\n🎨 /imagine — AI Image 💎\n🌐 /translate — Translator\n💻 /code — Code writer\n📋 /document — Document ⭐\n\n🪙 /coins — My coins\n👥 /referral — Invite friends\n🤝 /affiliate — Affiliate\n🎁 /gift — Daily bonus\n🏆 /top — Top users\n📊 /stats — Statistics\n🎟️ /promo — Promo code\n\n💰 /updateplan — Plans\n🌐 /language — Language\n/help — Help\n/reset — Clear history",
-        "help": "📌 Commands:\n\n/pptx 💎 /word 💎 /cv ⭐ /email ⭐\n/post /biznes /ai_sound ⭐ /imagine 💎\n/translate /code /document ⭐\n/coins /referral /affiliate\n/gift /top /stats /promo\n/updateplan /language /reset /help",
-        "limit_reached": "❌ Daily limit reached! Use /updateplan.",
-        "blocked": "🚫 You are blocked. Contact admin.",
-        "history_cleared": "✅ Chat history cleared.",
-        "generating_voice": "⏳ Generating voice...",
-        "generating_image": "⏳ Generating image...",
-        "voice_example": "Example: /ai_sound Hello!",
-        "imagine_example": "Example: /imagine beautiful sunset",
-        "imagine_locked": "💎 AI Image requires Premium!\n\nOr pay {stars}⭐ per image.",
-        "translate_prompt": "Example: /translate Hello → Uzbek",
-        "code_prompt": "Example: /code Python sort function",
-        "document_prompt": "Example: /document job application letter",
-        "choose_language": "🌐 Choose language:",
-        "language_changed": "✅ Language changed!",
-        "language_cooldown": "⏳ Change language once per 24 hours.",
-        "pdf_required": "Send a PDF file! 📄",
-        "reading_pdf": "⏳ Reading PDF...",
-        "pdf_locked": "⭐ PDF requires Standard or Premium!",
-        "voice_locked": "💎 Voice requires Premium!",
-        "pptx_locked": "💎 PowerPoint requires Premium!",
-        "word_locked": "💎 Word requires Premium!",
-        "cv_locked": "⭐ CV requires Standard or Premium!",
-        "email_locked": "⭐ Email requires Standard or Premium!",
-        "ai_sound_locked": "⭐ AI Sound requires Standard or Premium!",
-        "document_locked": "⭐ Document requires Standard or Premium!",
-        "writing_cv": "⏳ Writing CV...",
-        "writing_email": "⏳ Writing email...",
-        "writing_post": "⏳ Writing post...",
-        "writing_biznes": "⏳ Writing business plan...",
-        "writing_document": "⏳ Creating document...",
-        "translating": "⏳ Translating...",
-        "writing_code": "⏳ Writing code...",
-        "pptx_example": "Example: /pptx AI topic",
-        "word_example": "Example: /word business plan",
-        "cv_example": "Example: /cv Python dev 3 years",
-        "email_example": "Example: /email follow up",
-        "post_example": "Example: /post coffee shop",
-        "biznes_example": "Example: /biznes online store",
-        "creating_pptx": "⏳ Creating '{topic}'...",
-        "creating_word": "⏳ Creating '{topic}'...",
-        "ready": "✅ Ready!",
-        "buy_standard": "⭐ Standard — 10 USDT/month",
-        "buy_premium": "💎 Premium — 15 USDT/month",
-        "buy_standard_stars": f"⭐ Standard — {STARS_STANDARD}⭐",
-        "buy_premium_stars": f"💎 Premium — {STARS_PREMIUM}⭐",
-        "buy_standard_coins": f"⭐ Standard — {COINS_STANDARD:,} coins",
-        "buy_premium_coins": f"💎 Premium — {COINS_PREMIUM:,} coins",
-        "buy_group": f"👥 Group Mode — {STARS_GROUP}⭐ ($111.11)",
-        "upgrade_standard": "⭐ Upgrade to Standard",
-        "upgrade_premium": "💎 Upgrade to Premium",
-        "upgrade_plan": "💰 Upgrade Plan",
-        "contact_admin": "💬 Contact Admin",
-        "you_said": "🎤 You said: ",
-        "coins_info": "🪙 Your Coins: {coins}\n\n📈 Earn:\n• 5 coins per message\n• 25% from referrals\n\n🛒 Spend:\n• {standard:,} = ⭐ Standard 1 month\n• {premium:,} = 💎 Premium 1 month",
-        "coins_standard_btn": f"Buy Standard ({COINS_STANDARD:,} coins)",
-        "coins_premium_btn": f"Buy Premium ({COINS_PREMIUM:,} coins)",
-        "not_enough_coins": "❌ Need {need:,} more coins.",
-        "coins_success_standard": "✅ Standard activated for 30 days!",
-        "coins_success_premium": "✅ Premium activated for 30 days!",
-        "referral_title": "👥 Referral Program\n\n🔗 Your link:\n{link}\n\n📊 Invited: {count}\n\n🎁 Rewards:\n• 10 friends → ⭐ Standard 15 days — {standard_status}\n• 30 friends → 💎 Premium 15 days — {premium_status}\n\n🪙 Earn 25% of referrals' coins!",
-        "claim_standard": "🎁 Claim Standard 15 days",
-        "claim_premium": "🎁 Claim Premium 15 days",
-        "claim_standard_success": "🎉 ⭐ Standard activated for 15 days!",
-        "claim_premium_success": "🎉 💎 Premium activated for 15 days!",
-        "claim_error": "❌ Already claimed or not enough referrals!",
-        "affiliate_info": "🤝 Affiliate Program\n\n🔗 Your link:\n{link}\n\n📊 Referrals: {count}\n🪙 Earned: {earned} coins\n\n• Share your link\n• Earn 25% of their coins",
-        "stats_title": "📊 Your Statistics",
-        "gift_already": "🎁 Already claimed today! Come back tomorrow.",
-        "gift_success": "🎁 Daily bonus!\nStreak: {streak} days 🔥\n+5 messages & +25 coins!",
-        "gift_streak": "🎉 10 days streak!\n⭐ Standard for 10 days!",
-        "top_title": "🏆 Top 10 Active Users",
-        "payment_info": "💳 Card:\n`{card}`\n\n💵 Amount: {amount} USDT\n\n1. Screenshot\n2. Send to admin\n3. Activated in 1 hour ✅",
-        "promo_enter": "Enter promo code: /promo CODE",
-        "promo_invalid": "❌ Invalid promo code!",
-        "promo_used": "❌ Already used!",
-        "promo_success": "✅ Promo applied! {reward}",
-        "group_info": "👥 Group Mode — {stars}⭐ ($111.11)\n\nActivate bot for your group!\n• All members use the bot\n• Type 'bot [question]' in group\n• Bot replies in group chat",
-        "group_activated": "✅ Group mode activated!",
-        "warning": "⚠️ Warning {count}/{max}: Please be respectful!",
-        "banned_for_abuse": "🚫 You have been banned for abuse.",
-        "achievement_100k": "🏆 100,000 messages!\n⭐ Standard for 5 days!",
-        "imagine_pay": f"🎨 Pay {STARS_IMAGINE}⭐ per image",
-        "admin_plan": "👑 ADMIN — All features unlimited",
-    },
-    "uz": {
-        "welcome": "Salom! Men Chatbot 🤖\nTarifingiz: {plan_emoji} {plan}\n🪙 Coinlar: {coins}\n\n💬 Men bilan suhbatlashing\n🌐 Yangiliklar, narxlar, ob-havo\n📄 PDF tahlil\n🖼️ Rasm\n🎤 Ovozli xabar\n\n📊 /pptx — PowerPoint 💎\n📝 /word — Word 💎\n👤 /cv — CV ⭐\n📧 /email — Email ⭐\n📱 /post — Post\n🔊 /ai_sound — AI Ovoz ⭐\n🎨 /imagine — AI Rasm 💎\n🌐 /translate — Tarjimon\n💻 /code — Kod\n📋 /document — Hujjat ⭐\n\n🪙 /coins — Coinlarim\n👥 /referral — Do'stlarni taklif\n🤝 /affiliate — Affiliate\n🎁 /gift — Kunlik bonus\n🏆 /top — Top\n📊 /stats — Statistika\n🎟️ /promo — Promo\n\n💰 /updateplan — Tariflar\n🌐 /language — Til\n/help — Yordam\n/reset — Tozalash",
-        "help": "📌 Buyruqlar:\n\n/pptx 💎 /word 💎 /cv ⭐ /email ⭐\n/post /biznes /ai_sound ⭐ /imagine 💎\n/translate /code /document ⭐\n/coins /referral /affiliate\n/gift /top /stats /promo\n/updateplan /language /reset /help",
-        "limit_reached": "❌ Kunlik limit tugadi! /updateplan.",
-        "blocked": "🚫 Bloklangansiz.",
-        "history_cleared": "✅ Tarix tozalandi.",
-        "generating_voice": "⏳ Ovoz yaratilmoqda...",
-        "generating_image": "⏳ Rasm yaratilmoqda...",
-        "voice_example": "Misol: /ai_sound Salom!",
-        "imagine_example": "Misol: /imagine chiroyli quyosh botishi",
-        "imagine_locked": "💎 AI Rasm Premium uchun!\n\nYoki {stars}⭐ to'lab rasm oling.",
-        "translate_prompt": "Misol: /translate Hello → O'zbek",
-        "code_prompt": "Misol: /code Python saralash",
-        "document_prompt": "Misol: /document ish arizasi",
-        "choose_language": "🌐 Tilni tanlang:",
-        "language_changed": "✅ Til o'zgartirildi!",
-        "language_cooldown": "⏳ 24 soatda 1 marta o'zgartirish mumkin.",
-        "pdf_required": "PDF fayl yuboring! 📄",
-        "reading_pdf": "⏳ PDF o'qilmoqda...",
-        "pdf_locked": "⭐ PDF uchun Standart yoki Premium kerak!",
-        "voice_locked": "💎 Ovoz uchun Premium kerak!",
-        "pptx_locked": "💎 PowerPoint uchun Premium kerak!",
-        "word_locked": "💎 Word uchun Premium kerak!",
-        "cv_locked": "⭐ CV uchun Standart yoki Premium kerak!",
-        "email_locked": "⭐ Email uchun Standart yoki Premium kerak!",
-        "ai_sound_locked": "⭐ AI Ovoz uchun Standart yoki Premium kerak!",
-        "document_locked": "⭐ Hujjat uchun Standart yoki Premium kerak!",
-        "writing_cv": "⏳ CV yozilmoqda...",
-        "writing_email": "⏳ Email yozilmoqda...",
-        "writing_post": "⏳ Post yozilmoqda...",
-        "writing_biznes": "⏳ Biznes reja yozilmoqda...",
-        "writing_document": "⏳ Hujjat yaratilmoqda...",
-        "translating": "⏳ Tarjima qilinmoqda...",
-        "writing_code": "⏳ Kod yozilmoqda...",
-        "pptx_example": "Misol: /pptx sun'iy intellekt",
-        "word_example": "Misol: /word biznes reja",
-        "cv_example": "Misol: /cv Python dasturchi",
-        "email_example": "Misol: /email intervyu",
-        "post_example": "Misol: /post kofe do'kon",
-        "biznes_example": "Misol: /biznes online do'kon",
-        "creating_pptx": "⏳ '{topic}' yaratilmoqda...",
-        "creating_word": "⏳ '{topic}' yaratilmoqda...",
-        "ready": "✅ Tayyor!",
-        "buy_standard": "⭐ Standart — 10 USDT/oy",
-        "buy_premium": "💎 Premium — 15 USDT/oy",
-        "buy_standard_stars": f"⭐ Standart — {STARS_STANDARD}⭐",
-        "buy_premium_stars": f"💎 Premium — {STARS_PREMIUM}⭐",
-        "buy_standard_coins": f"⭐ Standart — {COINS_STANDARD:,} coin",
-        "buy_premium_coins": f"💎 Premium — {COINS_PREMIUM:,} coin",
-        "buy_group": f"👥 Guruh — {STARS_GROUP}⭐ ($111.11)",
-        "upgrade_standard": "⭐ Standartga o'tish",
-        "upgrade_premium": "💎 Premiumga o'tish",
-        "upgrade_plan": "💰 Tarifni yangilash",
-        "contact_admin": "💬 Admin",
-        "you_said": "🎤 Siz dedingiz: ",
-        "coins_info": "🪙 Coinlaringiz: {coins}\n\n📈 Qanday yig'iladi:\n• Har xabar — 5 coin\n• Referallardan 25%\n\n🛒 Sarflash:\n• {standard:,} = ⭐ Standart 1 oy\n• {premium:,} = 💎 Premium 1 oy",
-        "coins_standard_btn": f"Standart ({COINS_STANDARD:,} coin)",
-        "coins_premium_btn": f"Premium ({COINS_PREMIUM:,} coin)",
-        "not_enough_coins": "❌ Yana {need:,} coin kerak.",
-        "coins_success_standard": "✅ Standart 30 kunga yoqildi!",
-        "coins_success_premium": "✅ Premium 30 kunga yoqildi!",
-        "referral_title": "👥 Referal Dasturi\n\n🔗 Sizning havola:\n{link}\n\n📊 Taklif qilingan: {count}\n\n🎁 Mukofotlar:\n• 10 do'st → ⭐ Standart 15 kun — {standard_status}\n• 30 do'st → 💎 Premium 15 kun — {premium_status}\n\n🪙 Referallar coinining 25%ini olasiz!",
-        "claim_standard": "🎁 Standart 15 kun",
-        "claim_premium": "🎁 Premium 15 kun",
-        "claim_standard_success": "🎉 ⭐ Standart 15 kunga yoqildi!",
-        "claim_premium_success": "🎉 💎 Premium 15 kunga yoqildi!",
-        "claim_error": "❌ Allaqachon olingan yoki yetarli referal yo'q!",
-        "affiliate_info": "🤝 Affiliate Dasturi\n\n🔗 Sizning havola:\n{link}\n\n📊 Referallar: {count}\n🪙 Ishlangan: {earned} coin\n\n• Havolangizni ulashing\n• Ularning coinining 25%ini olasiz",
-        "stats_title": "📊 Sizning statistikangiz",
-        "gift_already": "🎁 Bugun bonus olindi! Ertaga qaytib keling.",
-        "gift_success": "🎁 Kunlik bonus!\nStreak: {streak} kun 🔥\n+5 xabar & +25 coin!",
-        "gift_streak": "🎉 10 kun ketma-ket!\n⭐ Standart 10 kunga yoqildi!",
-        "top_title": "🏆 Top 10 Faol Foydalanuvchilar",
-        "payment_info": "💳 Karta:\n`{card}`\n\n💵 Miqdor: {amount} USDT\n\n1. Skrinshot\n2. Adminga yuboring\n3. 1 soatda yoqiladi ✅",
-        "promo_enter": "Promo kodni kiriting: /promo KOD",
-        "promo_invalid": "❌ Noto'g'ri promo kod!",
-        "promo_used": "❌ Allaqachon ishlatilgan!",
-        "promo_success": "✅ Promo qo'llandi! {reward}",
-        "group_info": "👥 Guruh Rejimi — {stars}⭐ ($111.11)\n\nGuruhingiz uchun yoqing!\n• Barcha a'zolar foydalana oladi\n• Guruhda 'bot [savol]' deb yozing\n• Bot guruhda javob beradi",
-        "group_activated": "✅ Guruh rejimi yoqildi!",
-        "warning": "⚠️ Ogohlantirish {count}/{max}: Hurmat bilan muomala qiling!",
-        "banned_for_abuse": "🚫 Haqorat uchun bloklandi.",
-        "achievement_100k": "🏆 100,000 xabar!\n⭐ Standart 5 kunga yoqildi!",
-        "imagine_pay": f"🎨 {STARS_IMAGINE}⭐ to'lab rasm oling",
-        "admin_plan": "👑 ADMIN — Hamma narsa cheksiz",
-    },
-    "ru": {
-        "welcome": "Привет! Я Chatbot 🤖\nТариф: {plan_emoji} {plan}\n🪙 Монеты: {coins}\n\n💬 Общение\n🌐 Новости, цены, погода\n📄 PDF\n🖼️ Изображение\n🎤 Голос\n\n📊 /pptx 💎 /word 💎 /cv ⭐ /email ⭐\n📱 /post 🔊 /ai_sound ⭐ 🎨 /imagine 💎\n🌐 /translate 💻 /code 📋 /document ⭐\n\n🪙 /coins 👥 /referral 🤝 /affiliate\n🎁 /gift 🏆 /top 📊 /stats 🎟️ /promo\n\n💰 /updateplan 🌐 /language /help /reset",
-        "help": "📌 Команды:\n\n/pptx 💎 /word 💎 /cv ⭐ /email ⭐\n/post /biznes /ai_sound ⭐ /imagine 💎\n/translate /code /document ⭐\n/coins /referral /affiliate\n/gift /top /stats /promo\n/updateplan /language /reset /help",
-        "limit_reached": "❌ Лимит исчерпан! /updateplan",
-        "blocked": "🚫 Вы заблокированы.",
-        "history_cleared": "✅ История очищена.",
-        "generating_voice": "⏳ Генерация голоса...",
-        "generating_image": "⏳ Генерация изображения...",
-        "voice_example": "Пример: /ai_sound Привет!",
-        "imagine_example": "Пример: /imagine красивый закат",
-        "imagine_locked": "💎 AI Изображение — Premium!\n\nИли {stars}⭐ за изображение.",
-        "translate_prompt": "Пример: /translate Hello → Русский",
-        "code_prompt": "Пример: /code Python сортировка",
-        "document_prompt": "Пример: /document заявление",
-        "choose_language": "🌐 Выберите язык:",
-        "language_changed": "✅ Язык изменён!",
-        "language_cooldown": "⏳ Раз в 24 часа.",
-        "pdf_required": "Отправьте PDF! 📄",
-        "reading_pdf": "⏳ Читаю PDF...",
-        "pdf_locked": "⭐ PDF — Standard или Premium!",
-        "voice_locked": "💎 Голос — Premium!",
-        "pptx_locked": "💎 PowerPoint — Premium!",
-        "word_locked": "💎 Word — Premium!",
-        "cv_locked": "⭐ Резюме — Standard или Premium!",
-        "email_locked": "⭐ Email — Standard или Premium!",
-        "ai_sound_locked": "⭐ AI Голос — Standard или Premium!",
-        "document_locked": "⭐ Документ — Standard или Premium!",
-        "writing_cv": "⏳ Пишу резюме...",
-        "writing_email": "⏳ Пишу email...",
-        "writing_post": "⏳ Пишу пост...",
-        "writing_biznes": "⏳ Пишу бизнес-план...",
-        "writing_document": "⏳ Создаю документ...",
-        "translating": "⏳ Перевожу...",
-        "writing_code": "⏳ Пишу код...",
-        "pptx_example": "Пример: /pptx ИИ",
-        "word_example": "Пример: /word бизнес-план",
-        "cv_example": "Пример: /cv Python разработчик",
-        "email_example": "Пример: /email после собеседования",
-        "post_example": "Пример: /post кофейня",
-        "biznes_example": "Пример: /biznes магазин",
-        "creating_pptx": "⏳ Создаю '{topic}'...",
-        "creating_word": "⏳ Создаю '{topic}'...",
-        "ready": "✅ Готово!",
-        "buy_standard": "⭐ Standard — 10 USDT/мес",
-        "buy_premium": "💎 Premium — 15 USDT/мес",
-        "buy_standard_stars": f"⭐ Standard — {STARS_STANDARD}⭐",
-        "buy_premium_stars": f"💎 Premium — {STARS_PREMIUM}⭐",
-        "buy_standard_coins": f"⭐ Standard — {COINS_STANDARD:,} монет",
-        "buy_premium_coins": f"💎 Premium — {COINS_PREMIUM:,} монет",
-        "buy_group": f"👥 Группа — {STARS_GROUP}⭐ ($111.11)",
-        "upgrade_standard": "⭐ Standard",
-        "upgrade_premium": "💎 Premium",
-        "upgrade_plan": "💰 Обновить тариф",
-        "contact_admin": "💬 Админ",
-        "you_said": "🎤 Вы сказали: ",
-        "coins_info": "🪙 Монеты: {coins}\n\n📈 Заработать:\n• 5 монет за сообщение\n• 25% с рефералов\n\n🛒 Потратить:\n• {standard:,} = ⭐ Standard 1 месяц\n• {premium:,} = 💎 Premium 1 месяц",
-        "coins_standard_btn": f"Standard ({COINS_STANDARD:,} монет)",
-        "coins_premium_btn": f"Premium ({COINS_PREMIUM:,} монет)",
-        "not_enough_coins": "❌ Нужно ещё {need:,} монет.",
-        "coins_success_standard": "✅ Standard на 30 дней!",
-        "coins_success_premium": "✅ Premium на 30 дней!",
-        "referral_title": "👥 Реферальная программа\n\n🔗 Ваша ссылка:\n{link}\n\n📊 Приглашено: {count}\n\n🎁 Награды:\n• 10 → ⭐ Standard 15 дней — {standard_status}\n• 30 → 💎 Premium 15 дней — {premium_status}\n\n🪙 25% монет с рефералов!",
-        "claim_standard": "🎁 Standard 15 дней",
-        "claim_premium": "🎁 Premium 15 дней",
-        "claim_standard_success": "🎉 ⭐ Standard на 15 дней!",
-        "claim_premium_success": "🎉 💎 Premium на 15 дней!",
-        "claim_error": "❌ Уже получено или недостаточно!",
-        "affiliate_info": "🤝 Аффилиат\n\n🔗 Ваша ссылка:\n{link}\n\n📊 Рефералов: {count}\n🪙 Заработано: {earned} монет\n\n• Делитесь ссылкой\n• Получайте 25% монет",
-        "stats_title": "📊 Ваша статистика",
-        "gift_already": "🎁 Бонус уже получен! Завтра.",
-        "gift_success": "🎁 Бонус!\nСтрик: {streak} дней 🔥\n+5 сообщений & +25 монет!",
-        "gift_streak": "🎉 10 дней подряд!\n⭐ Standard на 10 дней!",
-        "top_title": "🏆 Топ 10",
-        "payment_info": "💳 Карта:\n`{card}`\n\n💵 {amount} USDT\n\n1. Скриншот → 2. Админу → 3. Активация ✅",
-        "promo_enter": "Введите промокод: /promo КОД",
-        "promo_invalid": "❌ Неверный промокод!",
-        "promo_used": "❌ Уже использован!",
-        "promo_success": "✅ Применён! {reward}",
-        "group_info": "👥 Групповой режим — {stars}⭐ ($111.11)\n\nАктивируйте для группы!\n• Все участники используют бота\n• Пишите 'bot [вопрос]' в группе\n• Бот отвечает в чате",
-        "group_activated": "✅ Групповой режим активирован!",
-        "warning": "⚠️ Предупреждение {count}/{max}: Будьте вежливы!",
-        "banned_for_abuse": "🚫 Заблокированы за оскорбления.",
-        "achievement_100k": "🏆 100,000 сообщений!\n⭐ Standard на 5 дней!",
-        "imagine_pay": f"🎨 {STARS_IMAGINE}⭐ за изображение",
-        "admin_plan": "👑 ADMIN — Всё безлимитно",
-    },
+# ═══════════════════════════════════════════════════════════
+#                   TRANSLATIONS
+# ═══════════════════════════════════════════════════════════
+T = {
+"en": {
+"welcome": (
+    "👋 *Welcome to {bot}!*\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "📋 *Plan:* {plan_emoji} {plan}\n"
+    "🪙 *Coins:* {coins:,}\n\n"
+    "🤖 *AI Features:*\n"
+    "💬 Chat • 🌐 Web search • 📄 PDF • 🖼️ Images • 🎤 Voice\n"
+    "🎨 AI Images • 🌐 Translate • 💻 Code • 📋 Documents\n\n"
+    "📦 *Create:*\n"
+    "📊 /pptx • 📝 /word • 👤 /cv • 📧 /email • 📱 /post\n\n"
+    "🌤 *Real-time:*\n"
+    "🌦 /weather • 💰 /crypto • 📰 /news\n\n"
+    "🎁 *Bonuses:*\n"
+    "🪙 /coins • 👥 /referral • 🤝 /affiliate\n"
+    "🎁 /gift • 🏆 /top • 📊 /stats • 🎟️ /promo\n\n"
+    "⚙️ /updateplan • 🌐 /language • ❓ /help"
+),
+"help": (
+    "📌 *All Commands*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🤖 *AI Chat & Tools:*\n"
+    "💬 Chat freely • 📄 Send PDF • 🖼️ Send image • 🎤 Voice\n"
+    "/translate /code /document ⭐\n\n"
+    "📦 *Create Files:*\n"
+    "/pptx 💎 • /word 💎 • /cv ⭐ • /email ⭐ • /post • /biznes\n\n"
+    "🎨 *AI Image:*\n"
+    "/imagine 💎 (or pay {img_stars}⭐ per image)\n\n"
+    "🔊 *AI Voice:*\n"
+    "/ai_sound ⭐\n\n"
+    "🌤 *Real-time Info:*\n"
+    "/weather [city] • /crypto [coin] • /news\n\n"
+    "💰 *Plans & Coins:*\n"
+    "/updateplan • /coins • /referral • /affiliate\n"
+    "/gift • /top • /stats • /promo\n\n"
+    "⚙️ *Settings:*\n"
+    "/language • /reset • /help\n\n"
+    "⭐ = Standard+ • 💎 = Premium only"
+),
+"plan_free":     "🆓 FREE",
+"plan_standard": "⭐ STANDARD",
+"plan_premium":  "💎 PREMIUM",
+"plan_admin":    "👑 ADMIN",
+"limit_reached": "❌ *Daily limit reached!*\nUse /updateplan to get more.",
+"blocked":       "🚫 You are blocked. Contact @{admin}",
+"cleared":       "✅ Chat history cleared!",
+"gen_voice":     "⏳ Generating voice...",
+"gen_image":     "⏳ Generating image...",
+"translating":   "⏳ Translating...",
+"writing_code":  "⏳ Writing code...",
+"writing_doc":   "⏳ Creating document...",
+"writing_cv":    "⏳ Writing CV...",
+"writing_email": "⏳ Writing email...",
+"writing_post":  "⏳ Writing post...",
+"writing_biz":   "⏳ Writing business plan...",
+"creating_pptx": "⏳ Creating presentation *{t}*...",
+"creating_word": "⏳ Creating document *{t}*...",
+"ready":         "✅ Ready!",
+"locked_std":    "⭐ *Requires Standard or Premium!*\nUse /updateplan.",
+"locked_prm":    "💎 *Requires Premium!*\nUse /updateplan.",
+"locked_img":    "💎 AI Image requires *Premium!*\n\nOr pay *{stars}⭐* per image.",
+"ex_voice":      "Example: `/ai_sound Hello world`",
+"ex_imagine":    "Example: `/imagine beautiful mountain sunset`",
+"ex_translate":  "Example: `/translate Hello → Uzbek`",
+"ex_code":       "Example: `/code Python fibonacci function`",
+"ex_document":   "Example: `/document job application for developer`",
+"ex_cv":         "Example: `/cv Python developer, 3 years experience`",
+"ex_email":      "Example: `/email follow up after interview`",
+"ex_post":       "Example: `/post grand opening of coffee shop`",
+"ex_biznes":     "Example: `/biznes online clothing store`",
+"ex_pptx":       "Example: `/pptx artificial intelligence`",
+"ex_word":       "Example: `/word business proposal`",
+"ex_weather":    "Example: `/weather London`",
+"ex_crypto":     "Example: `/crypto bitcoin`",
+"weather_err":   "❌ City not found. Try: `/weather London`",
+"crypto_err":    "❌ Coin not found. Try: `/crypto bitcoin`",
+"choose_lang":   "🌐 *Choose your language:*",
+"lang_changed":  "✅ Language changed to *English!*",
+"lang_cooldown": "⏳ You can change language once per 24 hours.",
+"pdf_only":      "📄 Please send a PDF file!",
+"reading_pdf":   "⏳ Reading PDF...",
+"you_said":      "🎤 *You said:* ",
+"coins_info": (
+    "🪙 *Your Coins: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📈 *Earn coins:*\n"
+    "• +{cpm} coins per message\n"
+    "• +{aff}% bonus from your referrals\n"
+    "• +25 coins daily bonus (/gift)\n\n"
+    "🛒 *Spend coins:*\n"
+    "• {std:,} coins = ⭐ Standard 30 days\n"
+    "• {prm:,} coins = 💎 Premium 30 days"
+),
+"not_enough":    "❌ Not enough coins! Need *{need:,}* more.",
+"coins_ok_std":  "✅ *Standard* activated for 30 days! 🎉",
+"coins_ok_prm":  "✅ *Premium* activated for 30 days! 🎉",
+"referral_info": (
+    "👥 *Referral Program*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Your invite link:*\n`{link}`\n\n"
+    "📊 *Invited:* {count} friends\n\n"
+    "🎁 *Rewards:*\n"
+    "• 10 friends → ⭐ Standard 15 days — {std_s}\n"
+    "• 30 friends → 💎 Premium 15 days — {prm_s}\n\n"
+    "🪙 Earn *{aff}%* of every referral's coins!"
+),
+"claim_std":     "🎁 Claim Standard 15 days",
+"claim_prm":     "🎁 Claim Premium 15 days",
+"claimed_std":   "🎉 *Standard* activated for 15 days!",
+"claimed_prm":   "🎉 *Premium* activated for 15 days!",
+"claim_err":     "❌ Already claimed or not enough referrals!",
+"aff_info": (
+    "🤝 *Affiliate Program*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Your affiliate link:*\n`{link}`\n\n"
+    "📊 *Total referrals:* {count}\n"
+    "🪙 *Total earned:* {earned:,} coins\n\n"
+    "💡 *How it works:*\n"
+    "Share your link. When someone uses the bot,\n"
+    "you earn *{aff}%* of their coins automatically!"
+),
+"stats_info": (
+    "📊 *Your Statistics*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "{plan_emoji} *Plan:* {plan}\n"
+    "📅 *Expires:* {expires}\n"
+    "🪙 *Coins:* {coins:,}\n"
+    "👥 *Referrals:* {refs}\n"
+    "🔥 *Streak:* {streak} days\n"
+    "💬 *Total messages:* {total:,}\n\n"
+    "📈 *Today's usage:*\n"
+    "💬 Chat: {chat} | 🌐 Search: {search}\n"
+    "🖼️ Image: {image} | 📄 PDF: {pdf}\n"
+    "👤 CV: {cv} | 📧 Email: {email}\n"
+    "🔊 Voice: {tts} | 📱 Post: {post}"
+),
+"gift_done":     "🎁 *Already claimed today!*\nCome back tomorrow 😊",
+"gift_ok":       "🎁 *Daily Bonus!*\nStreak: *{streak} days* 🔥\n+5 messages & +25 coins!",
+"gift_streak":   "🎉 *10 days streak!*\n⭐ Standard activated for 10 days!",
+"top_title":     "🏆 *Top 10 Most Active Users*\n━━━━━━━━━━━━━━━━━━━━\n\n",
+"promo_enter":   "Enter promo code: `/promo CODE`",
+"promo_bad":     "❌ Invalid or expired promo code!",
+"promo_used":    "❌ Already used this promo code!",
+"promo_ok":      "✅ Promo code applied! *{reward}*",
+"group_info": (
+    "👥 *Group Mode*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "💰 *Price:* {stars}⭐ ($111.11)\n\n"
+    "✅ *After activation:*\n"
+    "• All group members can use the bot\n"
+    "• Type `bot [question]` in group chat\n"
+    "• Bot replies directly in group\n\n"
+    "📌 After payment, add bot to group\n"
+    "and send /activate\\_group"
+),
+"group_activated":"✅ *Bot activated for this group!*\nMembers can now type `bot [question]`",
+"warning":       "⚠️ *Warning {c}/{m}:* Please be respectful!",
+"banned":        "🚫 You have been banned for repeated abuse.",
+"achievement":   "🏆 *Achievement Unlocked!*\n100,000 messages!\n⭐ Standard activated for 5 days!",
+"updateplan_txt": (
+    "💰 *Plans & Pricing*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🆓 *FREE*\n"
+    "• Chat: 20/day • Search: 20/day\n"
+    "• Translate: 20/day • Code: 20/day\n\n"
+    "⭐ *STANDARD — {u_std} USDT / {s_std}⭐ / {c_std:,}🪙*\n"
+    "• Everything 30/day\n"
+    "• PDF ✓ • CV ✓ • Email ✓ • AI Voice ✓ • Document ✓\n\n"
+    "💎 *PREMIUM — {u_prm} USDT / {s_prm}⭐ / {c_prm:,}🪙*\n"
+    "• Everything Unlimited\n"
+    "• AI Image ✓ • PowerPoint ✓ • Word ✓ • Voice messages ✓\n\n"
+    "👥 *GROUP MODE — {s_grp}⭐ ($111.11)*\n"
+    "• Bot for your entire group\n\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "{plan_emoji} *Current:* {plan} | 📅 {expires} | 🪙 {coins:,}"
+),
+"pay_card":      "💳 *Pay to card:*\n`{card}`\n\n💵 Amount: *{amt} USDT*\n\n1. Screenshot\n2. Send to @{admin}\n3. Activated in 1 hour ✅",
+"btn_std_stars": "⭐ Standard — {s}⭐",
+"btn_prm_stars": "💎 Premium — {s}⭐",
+"btn_std_coins": "⭐ Standard — {c:,} 🪙",
+"btn_prm_coins": "💎 Premium — {c:,} 🪙",
+"btn_std_card":  "💳 Standard — {u} USDT",
+"btn_prm_card":  "💳 Premium — {u} USDT",
+"btn_group":     "👥 Group Mode — {s}⭐",
+"btn_upgrade_std":"⭐ Upgrade to Standard",
+"btn_upgrade_prm":"💎 Upgrade to Premium",
+"btn_contact":   "💬 Contact Admin",
+"btn_imagine":   "🎨 Pay {s}⭐ for this image",
+},
+
+"uz": {
+"welcome": (
+    "👋 *{bot} ga xush kelibsiz!*\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "📋 *Tarif:* {plan_emoji} {plan}\n"
+    "🪙 *Coinlar:* {coins:,}\n\n"
+    "🤖 *AI Imkoniyatlar:*\n"
+    "💬 Suhbat • 🌐 Qidiruv • 📄 PDF • 🖼️ Rasm • 🎤 Ovoz\n"
+    "🎨 AI Rasm • 🌐 Tarjima • 💻 Kod • 📋 Hujjat\n\n"
+    "📦 *Yaratish:*\n"
+    "📊 /pptx • 📝 /word • 👤 /cv • 📧 /email • 📱 /post\n\n"
+    "🌤 *Real-vaqt:*\n"
+    "🌦 /weather • 💰 /crypto • 📰 /news\n\n"
+    "🎁 *Bonuslar:*\n"
+    "🪙 /coins • 👥 /referral • 🤝 /affiliate\n"
+    "🎁 /gift • 🏆 /top • 📊 /stats • 🎟️ /promo\n\n"
+    "⚙️ /updateplan • 🌐 /language • ❓ /help"
+),
+"help": (
+    "📌 *Barcha Buyruqlar*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🤖 *AI Suhbat va Asboblar:*\n"
+    "💬 Erkin suhbat • 📄 PDF • 🖼️ Rasm • 🎤 Ovoz\n"
+    "/translate /code /document ⭐\n\n"
+    "📦 *Fayl Yaratish:*\n"
+    "/pptx 💎 • /word 💎 • /cv ⭐ • /email ⭐ • /post • /biznes\n\n"
+    "🎨 *AI Rasm:*\n"
+    "/imagine 💎 (yoki {img_stars}⭐ har bir rasm uchun)\n\n"
+    "🔊 *AI Ovoz:*\n"
+    "/ai_sound ⭐\n\n"
+    "🌤 *Real-vaqt Ma'lumot:*\n"
+    "/weather [shahar] • /crypto [valyuta] • /news\n\n"
+    "💰 *Tariflar va Coinlar:*\n"
+    "/updateplan • /coins • /referral • /affiliate\n"
+    "/gift • /top • /stats • /promo\n\n"
+    "⚙️ *Sozlamalar:*\n"
+    "/language • /reset • /help\n\n"
+    "⭐ = Standart+ • 💎 = Faqat Premium"
+),
+"plan_free":     "🆓 BEPUL",
+"plan_standard": "⭐ STANDART",
+"plan_premium":  "💎 PREMIUM",
+"plan_admin":    "👑 ADMIN",
+"limit_reached": "❌ *Kunlik limit tugadi!*\nKo'proq olish uchun /updateplan.",
+"blocked":       "🚫 Bloklangansiz. @{admin} bilan bog'laning.",
+"cleared":       "✅ Suhbat tarixi tozalandi!",
+"gen_voice":     "⏳ Ovoz yaratilmoqda...",
+"gen_image":     "⏳ Rasm yaratilmoqda...",
+"translating":   "⏳ Tarjima qilinmoqda...",
+"writing_code":  "⏳ Kod yozilmoqda...",
+"writing_doc":   "⏳ Hujjat yaratilmoqda...",
+"writing_cv":    "⏳ CV yozilmoqda...",
+"writing_email": "⏳ Email yozilmoqda...",
+"writing_post":  "⏳ Post yozilmoqda...",
+"writing_biz":   "⏳ Biznes reja yozilmoqda...",
+"creating_pptx": "⏳ *{t}* prezentatsiyasi yaratilmoqda...",
+"creating_word": "⏳ *{t}* hujjati yaratilmoqda...",
+"ready":         "✅ Tayyor!",
+"locked_std":    "⭐ *Standart yoki Premium kerak!*\n/updateplan orqali yangilang.",
+"locked_prm":    "💎 *Premium kerak!*\n/updateplan orqali yangilang.",
+"locked_img":    "💎 AI Rasm *Premium* talab qiladi!\n\nYoki *{stars}⭐* to'lab rasm oling.",
+"ex_voice":      "Misol: `/ai_sound Salom dunyo`",
+"ex_imagine":    "Misol: `/imagine tog'lar ustidagi quyosh botishi`",
+"ex_translate":  "Misol: `/translate Hello → O'zbek`",
+"ex_code":       "Misol: `/code Python fibonacci funksiyasi`",
+"ex_document":   "Misol: `/document dasturchi uchun ish arizasi`",
+"ex_cv":         "Misol: `/cv Python dasturchi, 3 yil tajriba`",
+"ex_email":      "Misol: `/email intervyudan keyin xat`",
+"ex_post":       "Misol: `/post kofe do'kon ochilishi`",
+"ex_biznes":     "Misol: `/biznes online kiyim do'koni`",
+"ex_pptx":       "Misol: `/pptx sun'iy intellekt`",
+"ex_word":       "Misol: `/word biznes taklif`",
+"ex_weather":    "Misol: `/weather Toshkent`",
+"ex_crypto":     "Misol: `/crypto bitcoin`",
+"weather_err":   "❌ Shahar topilmadi. Misol: `/weather Toshkent`",
+"crypto_err":    "❌ Valyuta topilmadi. Misol: `/crypto bitcoin`",
+"choose_lang":   "🌐 *Tilni tanlang:*",
+"lang_changed":  "✅ Til *O'zbekcha*ga o'zgartirildi!",
+"lang_cooldown": "⏳ Tilni 24 soatda 1 marta o'zgartirish mumkin.",
+"pdf_only":      "📄 Iltimos PDF fayl yuboring!",
+"reading_pdf":   "⏳ PDF o'qilmoqda...",
+"you_said":      "🎤 *Siz dedingiz:* ",
+"coins_info": (
+    "🪙 *Sizning Coinlaringiz: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📈 *Qanday yig'iladi:*\n"
+    "• Har xabar uchun +{cpm} coin\n"
+    "• Referallardan +{aff}% bonus\n"
+    "• Kunlik bonus +25 coin (/gift)\n\n"
+    "🛒 *Sarflash:*\n"
+    "• {std:,} coin = ⭐ Standart 30 kun\n"
+    "• {prm:,} coin = 💎 Premium 30 kun"
+),
+"not_enough":    "❌ Coin yetarli emas! Yana *{need:,}* coin kerak.",
+"coins_ok_std":  "✅ *Standart* 30 kunga yoqildi! 🎉",
+"coins_ok_prm":  "✅ *Premium* 30 kunga yoqildi! 🎉",
+"referral_info": (
+    "👥 *Referal Dasturi*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Sizning havola:*\n`{link}`\n\n"
+    "📊 *Taklif qilingan:* {count} do'st\n\n"
+    "🎁 *Mukofotlar:*\n"
+    "• 10 do'st → ⭐ Standart 15 kun — {std_s}\n"
+    "• 30 do'st → 💎 Premium 15 kun — {prm_s}\n\n"
+    "🪙 Referallar coinining *{aff}%*ini olasiz!"
+),
+"claim_std":     "🎁 Standart 15 kun olish",
+"claim_prm":     "🎁 Premium 15 kun olish",
+"claimed_std":   "🎉 *Standart* 15 kunga yoqildi!",
+"claimed_prm":   "🎉 *Premium* 15 kunga yoqildi!",
+"claim_err":     "❌ Allaqachon olingan yoki referal yetarli emas!",
+"aff_info": (
+    "🤝 *Affiliate Dasturi*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Sizning havola:*\n`{link}`\n\n"
+    "📊 *Jami referallar:* {count}\n"
+    "🪙 *Jami ishlangan:* {earned:,} coin\n\n"
+    "💡 *Qanday ishlaydi:*\n"
+    "Havolangizni ulashing. Kimdir botdan foydalansa,\n"
+    "ularning coinining *{aff}%*ini olasiz!"
+),
+"stats_info": (
+    "📊 *Sizning Statistikangiz*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "{plan_emoji} *Tarif:* {plan}\n"
+    "📅 *Tugash:* {expires}\n"
+    "🪙 *Coinlar:* {coins:,}\n"
+    "👥 *Referallar:* {refs}\n"
+    "🔥 *Streak:* {streak} kun\n"
+    "💬 *Jami xabarlar:* {total:,}\n\n"
+    "📈 *Bugungi foydalanish:*\n"
+    "💬 Suhbat: {chat} | 🌐 Qidiruv: {search}\n"
+    "🖼️ Rasm: {image} | 📄 PDF: {pdf}\n"
+    "👤 CV: {cv} | 📧 Email: {email}\n"
+    "🔊 Ovoz: {tts} | 📱 Post: {post}"
+),
+"gift_done":     "🎁 *Bugun bonus allaqachon olindi!*\nErtaga qaytib keling 😊",
+"gift_ok":       "🎁 *Kunlik Bonus!*\nStreak: *{streak} kun* 🔥\n+5 xabar va +25 coin!",
+"gift_streak":   "🎉 *10 kun ketma-ket!*\n⭐ Standart 10 kunga yoqildi!",
+"top_title":     "🏆 *Top 10 Eng Faol Foydalanuvchilar*\n━━━━━━━━━━━━━━━━━━━━\n\n",
+"promo_enter":   "Promo kodni kiriting: `/promo KOD`",
+"promo_bad":     "❌ Noto'g'ri yoki muddati o'tgan promo kod!",
+"promo_used":    "❌ Bu promo kod allaqachon ishlatilgan!",
+"promo_ok":      "✅ Promo kod qo'llandi! *{reward}*",
+"group_info": (
+    "👥 *Guruh Rejimi*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "💰 *Narx:* {stars}⭐ ($111.11)\n\n"
+    "✅ *Yoqilgandan keyin:*\n"
+    "• Barcha a'zolar botdan foydalana oladi\n"
+    "• Guruhda `bot [savol]` deb yozing\n"
+    "• Bot guruhda javob beradi\n\n"
+    "📌 To'lovdan keyin botni guruhga qo'shing\n"
+    "va /activate\\_group yuboring"
+),
+"group_activated":"✅ *Bot bu guruh uchun yoqildi!*\nA'zolar `bot [savol]` deb yoza oladi",
+"warning":       "⚠️ *Ogohlantirish {c}/{m}:* Iltimos hurmat bilan muomala qiling!",
+"banned":        "🚫 Qayta-qayta haqorat qilgani uchun bloklandi.",
+"achievement":   "🏆 *Yutuq qo'lga kiritildi!*\n100,000 xabar!\n⭐ Standart 5 kunga yoqildi!",
+"updateplan_txt": (
+    "💰 *Tariflar va Narxlar*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🆓 *BEPUL*\n"
+    "• Suhbat: 20/kun • Qidiruv: 20/kun\n"
+    "• Tarjima: 20/kun • Kod: 20/kun\n\n"
+    "⭐ *STANDART — {u_std} USDT / {s_std}⭐ / {c_std:,}🪙*\n"
+    "• Hammasi 30/kun\n"
+    "• PDF ✓ • CV ✓ • Email ✓ • AI Ovoz ✓ • Hujjat ✓\n\n"
+    "💎 *PREMIUM — {u_prm} USDT / {s_prm}⭐ / {c_prm:,}🪙*\n"
+    "• Hammasi Cheksiz\n"
+    "• AI Rasm ✓ • PowerPoint ✓ • Word ✓ • Ovozli xabar ✓\n\n"
+    "👥 *GURUH REJIMI — {s_grp}⭐ ($111.11)*\n"
+    "• Butun guruh uchun bot\n\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "{plan_emoji} *Hozirgi:* {plan} | 📅 {expires} | 🪙 {coins:,}"
+),
+"pay_card":      "💳 *Kartaga to'lang:*\n`{card}`\n\n💵 Miqdor: *{amt} USDT*\n\n1. Skrinshot\n2. @{admin} ga yuboring\n3. 1 soatda yoqiladi ✅",
+"btn_std_stars": "⭐ Standart — {s}⭐",
+"btn_prm_stars": "💎 Premium — {s}⭐",
+"btn_std_coins": "⭐ Standart — {c:,} 🪙",
+"btn_prm_coins": "💎 Premium — {c:,} 🪙",
+"btn_std_card":  "💳 Standart — {u} USDT",
+"btn_prm_card":  "💳 Premium — {u} USDT",
+"btn_group":     "👥 Guruh — {s}⭐",
+"btn_upgrade_std":"⭐ Standartga o'tish",
+"btn_upgrade_prm":"💎 Premiumga o'tish",
+"btn_contact":   "💬 Admin bilan bog'lanish",
+"btn_imagine":   "🎨 {s}⭐ to'lab rasm oling",
+},
+
+"ru": {
+"welcome": (
+    "👋 *Добро пожаловать в {bot}!*\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "📋 *Тариф:* {plan_emoji} {plan}\n"
+    "🪙 *Монеты:* {coins:,}\n\n"
+    "🤖 *AI Возможности:*\n"
+    "💬 Чат • 🌐 Поиск • 📄 PDF • 🖼️ Фото • 🎤 Голос\n"
+    "🎨 AI Изображения • 🌐 Перевод • 💻 Код • 📋 Документы\n\n"
+    "📦 *Создание:*\n"
+    "📊 /pptx • 📝 /word • 👤 /cv • 📧 /email • 📱 /post\n\n"
+    "🌤 *Реальное время:*\n"
+    "🌦 /weather • 💰 /crypto • 📰 /news\n\n"
+    "🎁 *Бонусы:*\n"
+    "🪙 /coins • 👥 /referral • 🤝 /affiliate\n"
+    "🎁 /gift • 🏆 /top • 📊 /stats • 🎟️ /promo\n\n"
+    "⚙️ /updateplan • 🌐 /language • ❓ /help"
+),
+"help": (
+    "📌 *Все Команды*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🤖 *AI Чат и Инструменты:*\n"
+    "💬 Чат • 📄 PDF • 🖼️ Фото • 🎤 Голос\n"
+    "/translate /code /document ⭐\n\n"
+    "📦 *Создание Файлов:*\n"
+    "/pptx 💎 • /word 💎 • /cv ⭐ • /email ⭐ • /post • /biznes\n\n"
+    "🎨 *AI Изображение:*\n"
+    "/imagine 💎 (или {img_stars}⭐ за изображение)\n\n"
+    "🔊 *AI Голос:* /ai_sound ⭐\n\n"
+    "🌤 *Реальное время:*\n"
+    "/weather [город] • /crypto [монета] • /news\n\n"
+    "💰 *Тарифы и Монеты:*\n"
+    "/updateplan • /coins • /referral • /affiliate\n"
+    "/gift • /top • /stats • /promo\n\n"
+    "⚙️ /language • /reset • /help\n\n"
+    "⭐ = Standard+ • 💎 = Только Premium"
+),
+"plan_free":     "🆓 БЕСПЛАТНО",
+"plan_standard": "⭐ STANDARD",
+"plan_premium":  "💎 PREMIUM",
+"plan_admin":    "👑 ADMIN",
+"limit_reached": "❌ *Дневной лимит исчерпан!*\nИспользуйте /updateplan.",
+"blocked":       "🚫 Вы заблокированы. Обратитесь к @{admin}",
+"cleared":       "✅ История чата очищена!",
+"gen_voice":     "⏳ Генерация голоса...",
+"gen_image":     "⏳ Генерация изображения...",
+"translating":   "⏳ Перевожу...",
+"writing_code":  "⏳ Пишу код...",
+"writing_doc":   "⏳ Создаю документ...",
+"writing_cv":    "⏳ Пишу резюме...",
+"writing_email": "⏳ Пишу email...",
+"writing_post":  "⏳ Пишу пост...",
+"writing_biz":   "⏳ Пишу бизнес-план...",
+"creating_pptx": "⏳ Создаю презентацию *{t}*...",
+"creating_word": "⏳ Создаю документ *{t}*...",
+"ready":         "✅ Готово!",
+"locked_std":    "⭐ *Требуется Standard или Premium!*\n/updateplan",
+"locked_prm":    "💎 *Требуется Premium!*\n/updateplan",
+"locked_img":    "💎 AI Изображение требует *Premium!*\n\nИли заплатите *{stars}⭐* за изображение.",
+"ex_voice":      "Пример: `/ai_sound Привет мир`",
+"ex_imagine":    "Пример: `/imagine красивый закат в горах`",
+"ex_translate":  "Пример: `/translate Hello → Русский`",
+"ex_code":       "Пример: `/code Python функция Фибоначчи`",
+"ex_document":   "Пример: `/document заявление на работу разработчика`",
+"ex_cv":         "Пример: `/cv Python разработчик, 3 года опыта`",
+"ex_email":      "Пример: `/email письмо после собеседования`",
+"ex_post":       "Пример: `/post открытие кофейни`",
+"ex_biznes":     "Пример: `/biznes онлайн магазин одежды`",
+"ex_pptx":       "Пример: `/pptx искусственный интеллект`",
+"ex_word":       "Пример: `/word бизнес-предложение`",
+"ex_weather":    "Пример: `/weather Москва`",
+"ex_crypto":     "Пример: `/crypto bitcoin`",
+"weather_err":   "❌ Город не найден. Пример: `/weather Москва`",
+"crypto_err":    "❌ Монета не найдена. Пример: `/crypto bitcoin`",
+"choose_lang":   "🌐 *Выберите язык:*",
+"lang_changed":  "✅ Язык изменён на *Русский!*",
+"lang_cooldown": "⏳ Язык можно менять раз в 24 часа.",
+"pdf_only":      "📄 Отправьте PDF файл!",
+"reading_pdf":   "⏳ Читаю PDF...",
+"you_said":      "🎤 *Вы сказали:* ",
+"coins_info": (
+    "🪙 *Ваши Монеты: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📈 *Зарабатывать:*\n"
+    "• +{cpm} монет за сообщение\n"
+    "• +{aff}% бонус от рефералов\n"
+    "• +25 монет ежедневный бонус (/gift)\n\n"
+    "🛒 *Потратить:*\n"
+    "• {std:,} монет = ⭐ Standard 30 дней\n"
+    "• {prm:,} монет = 💎 Premium 30 дней"
+),
+"not_enough":    "❌ Недостаточно монет! Нужно ещё *{need:,}*.",
+"coins_ok_std":  "✅ *Standard* активирован на 30 дней! 🎉",
+"coins_ok_prm":  "✅ *Premium* активирован на 30 дней! 🎉",
+"referral_info": (
+    "👥 *Реферальная Программа*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Ваша ссылка:*\n`{link}`\n\n"
+    "📊 *Приглашено:* {count} друзей\n\n"
+    "🎁 *Награды:*\n"
+    "• 10 друзей → ⭐ Standard 15 дней — {std_s}\n"
+    "• 30 друзей → 💎 Premium 15 дней — {prm_s}\n\n"
+    "🪙 Получайте *{aff}%* монет рефералов!"
+),
+"claim_std":     "🎁 Получить Standard 15 дней",
+"claim_prm":     "🎁 Получить Premium 15 дней",
+"claimed_std":   "🎉 *Standard* активирован на 15 дней!",
+"claimed_prm":   "🎉 *Premium* активирован на 15 дней!",
+"claim_err":     "❌ Уже получено или недостаточно рефералов!",
+"aff_info": (
+    "🤝 *Аффилиат Программа*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Ваша ссылка:*\n`{link}`\n\n"
+    "📊 *Всего рефералов:* {count}\n"
+    "🪙 *Всего заработано:* {earned:,} монет\n\n"
+    "💡 *Как работает:*\n"
+    "Делитесь ссылкой. Когда кто-то использует бота,\n"
+    "вы получаете *{aff}%* их монет автоматически!"
+),
+"stats_info": (
+    "📊 *Ваша Статистика*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "{plan_emoji} *Тариф:* {plan}\n"
+    "📅 *Истекает:* {expires}\n"
+    "🪙 *Монеты:* {coins:,}\n"
+    "👥 *Рефералов:* {refs}\n"
+    "🔥 *Серия:* {streak} дней\n"
+    "💬 *Всего сообщений:* {total:,}\n\n"
+    "📈 *Использование сегодня:*\n"
+    "💬 Чат: {chat} | 🌐 Поиск: {search}\n"
+    "🖼️ Фото: {image} | 📄 PDF: {pdf}\n"
+    "👤 CV: {cv} | 📧 Email: {email}\n"
+    "🔊 Голос: {tts} | 📱 Пост: {post}"
+),
+"gift_done":     "🎁 *Бонус уже получен сегодня!*\nВозвращайтесь завтра 😊",
+"gift_ok":       "🎁 *Ежедневный Бонус!*\nСерия: *{streak} дней* 🔥\n+5 сообщений и +25 монет!",
+"gift_streak":   "🎉 *10 дней подряд!*\n⭐ Standard активирован на 10 дней!",
+"top_title":     "🏆 *Топ 10 Самых Активных Пользователей*\n━━━━━━━━━━━━━━━━━━━━\n\n",
+"promo_enter":   "Введите промокод: `/promo КОД`",
+"promo_bad":     "❌ Неверный или истёкший промокод!",
+"promo_used":    "❌ Этот промокод уже использован!",
+"promo_ok":      "✅ Промокод применён! *{reward}*",
+"group_info": (
+    "👥 *Групповой Режим*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "💰 *Цена:* {stars}⭐ ($111.11)\n\n"
+    "✅ *После активации:*\n"
+    "• Все участники группы могут использовать бота\n"
+    "• Напишите `bot [вопрос]` в группе\n"
+    "• Бот отвечает прямо в чате\n\n"
+    "📌 После оплаты добавьте бота в группу\n"
+    "и отправьте /activate\\_group"
+),
+"group_activated":"✅ *Бот активирован для этой группы!*\nУчастники могут писать `bot [вопрос]`",
+"warning":       "⚠️ *Предупреждение {c}/{m}:* Пожалуйста, будьте вежливы!",
+"banned":        "🚫 Заблокированы за повторные оскорбления.",
+"achievement":   "🏆 *Достижение разблокировано!*\n100,000 сообщений!\n⭐ Standard активирован на 5 дней!",
+"updateplan_txt": (
+    "💰 *Тарифы и Цены*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🆓 *БЕСПЛАТНО*\n"
+    "• Чат: 20/день • Поиск: 20/день\n"
+    "• Перевод: 20/день • Код: 20/день\n\n"
+    "⭐ *STANDARD — {u_std} USDT / {s_std}⭐ / {c_std:,}🪙*\n"
+    "• Всё 30/день\n"
+    "• PDF ✓ • CV ✓ • Email ✓ • AI Голос ✓ • Документ ✓\n\n"
+    "💎 *PREMIUM — {u_prm} USDT / {s_prm}⭐ / {c_prm:,}🪙*\n"
+    "• Всё Безлимитно\n"
+    "• AI Изображение ✓ • PowerPoint ✓ • Word ✓ • Голосовые ✓\n\n"
+    "👥 *ГРУППОВОЙ РЕЖИМ — {s_grp}⭐ ($111.11)*\n"
+    "• Бот для всей группы\n\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "{plan_emoji} *Текущий:* {plan} | 📅 {expires} | 🪙 {coins:,}"
+),
+"pay_card":      "💳 *Оплатите на карту:*\n`{card}`\n\n💵 Сумма: *{amt} USDT*\n\n1. Скриншот\n2. Отправьте @{admin}\n3. Активация в течение 1 часа ✅",
+"btn_std_stars": "⭐ Standard — {s}⭐",
+"btn_prm_stars": "💎 Premium — {s}⭐",
+"btn_std_coins": "⭐ Standard — {c:,} 🪙",
+"btn_prm_coins": "💎 Premium — {c:,} 🪙",
+"btn_std_card":  "💳 Standard — {u} USDT",
+"btn_prm_card":  "💳 Premium — {u} USDT",
+"btn_group":     "👥 Группа — {s}⭐",
+"btn_upgrade_std":"⭐ Перейти на Standard",
+"btn_upgrade_prm":"💎 Перейти на Premium",
+"btn_contact":   "💬 Написать Админу",
+"btn_imagine":   "🎨 {s}⭐ за это изображение",
+},
 }
 
-for lang in LANGUAGES:
-    if lang not in TEXTS:
-        TEXTS[lang] = TEXTS["en"]
+# Fill remaining languages with English
+for _lang in LANGUAGES:
+    if _lang not in T:
+        T[_lang] = T["en"]
 
-def get_text(lang, key, **kwargs):
-    t = TEXTS.get(lang, TEXTS["en"]).get(key, TEXTS["en"].get(key, ""))
-    if kwargs:
-        try:
-            t = t.format(**kwargs)
-        except:
-            pass
+def tx(lang, key, **kw):
+    t = T.get(lang, T["en"]).get(key, T["en"].get(key, ""))
+    if kw:
+        try: t = t.format(**kw)
+        except: pass
     return t
 
-def detect_lang_gtts(text):
-    try:
-        lang = detect(text)
-        return GTTS_LANG_MAP.get(lang, "en")
-    except:
-        return "en"
+# ═══════════════════════════════════════════════════════════
+#                   GROQ CLIENT
+# ═══════════════════════════════════════════════════════════
+groq = Groq(api_key=GROQ_API_KEY)
+user_histories = {}
 
-def generate_referral_code():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-
-def generate_promo_code():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
-
-def is_bad_message(text):
-    text_lower = text.lower()
-    return any(word in text_lower for word in BAD_WORDS)
-
-def get_conn():
+# ═══════════════════════════════════════════════════════════
+#                   DATABASE
+# ═══════════════════════════════════════════════════════════
+def db():
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
-    conn = get_conn()
+    conn = db()
     c = conn.cursor()
     c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT UNIQUE,
-            username TEXT,
-            full_name TEXT,
-            plan TEXT DEFAULT 'free',
-            expires_at TIMESTAMP,
-            is_blocked BOOLEAN DEFAULT FALSE,
-            is_admin BOOLEAN DEFAULT FALSE,
-            joined_at TIMESTAMP DEFAULT NOW(),
-            usage_chat INTEGER DEFAULT 0,
-            usage_search INTEGER DEFAULT 0,
-            usage_image INTEGER DEFAULT 0,
-            usage_post INTEGER DEFAULT 0,
-            usage_biznes INTEGER DEFAULT 0,
-            usage_pdf INTEGER DEFAULT 0,
-            usage_cv INTEGER DEFAULT 0,
-            usage_email INTEGER DEFAULT 0,
-            usage_tts INTEGER DEFAULT 0,
-            referral_code TEXT,
-            referred_by BIGINT,
-            referral_count INTEGER DEFAULT 0,
-            claimed_standard BOOLEAN DEFAULT FALSE,
-            claimed_premium BOOLEAN DEFAULT FALSE,
-            language TEXT DEFAULT 'en',
-            language_changed_at TIMESTAMP,
-            streak_count INTEGER DEFAULT 0,
-            last_gift_claim DATE,
-            streak_claimed BOOLEAN DEFAULT FALSE,
-            group_plan TEXT DEFAULT 'none',
-            total_messages INTEGER DEFAULT 0,
-            coins INTEGER DEFAULT 0,
-            warning_count INTEGER DEFAULT 0,
-            affiliate_code TEXT,
-            affiliate_earnings INTEGER DEFAULT 0,
-            achievement_100k BOOLEAN DEFAULT FALSE,
-            last_reset DATE DEFAULT CURRENT_DATE
-        )
-    """)
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT UNIQUE NOT NULL,
+        username TEXT, full_name TEXT,
+        plan TEXT DEFAULT 'free',
+        expires_at TIMESTAMP,
+        is_blocked BOOLEAN DEFAULT FALSE,
+        is_admin BOOLEAN DEFAULT FALSE,
+        joined_at TIMESTAMP DEFAULT NOW(),
+        language TEXT DEFAULT 'en',
+        language_changed_at TIMESTAMP,
+        coins INTEGER DEFAULT 0,
+        warning_count INTEGER DEFAULT 0,
+        referral_code TEXT,
+        affiliate_code TEXT,
+        referred_by BIGINT,
+        referral_count INTEGER DEFAULT 0,
+        affiliate_earnings INTEGER DEFAULT 0,
+        claimed_standard BOOLEAN DEFAULT FALSE,
+        claimed_premium BOOLEAN DEFAULT FALSE,
+        streak_count INTEGER DEFAULT 0,
+        last_gift_claim DATE,
+        streak_claimed BOOLEAN DEFAULT FALSE,
+        group_plan TEXT DEFAULT 'none',
+        total_messages INTEGER DEFAULT 0,
+        achievement_100k BOOLEAN DEFAULT FALSE,
+        usage_chat INTEGER DEFAULT 0,
+        usage_search INTEGER DEFAULT 0,
+        usage_image INTEGER DEFAULT 0,
+        usage_post INTEGER DEFAULT 0,
+        usage_biznes INTEGER DEFAULT 0,
+        usage_pdf INTEGER DEFAULT 0,
+        usage_cv INTEGER DEFAULT 0,
+        usage_email INTEGER DEFAULT 0,
+        usage_tts INTEGER DEFAULT 0,
+        last_reset DATE DEFAULT CURRENT_DATE
+    )""")
     c.execute("""
-        CREATE TABLE IF NOT EXISTS group_modes (
-            chat_id BIGINT PRIMARY KEY,
-            activated_by BIGINT,
-            activated_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    CREATE TABLE IF NOT EXISTS user_memory (
+        user_id BIGINT PRIMARY KEY,
+        name TEXT, facts TEXT
+    )""")
     c.execute("""
-        CREATE TABLE IF NOT EXISTS user_memory (
-            user_id BIGINT PRIMARY KEY,
-            name TEXT,
-            facts TEXT
-        )
-    """)
+    CREATE TABLE IF NOT EXISTS group_modes (
+        chat_id BIGINT PRIMARY KEY,
+        activated_by BIGINT,
+        activated_at TIMESTAMP DEFAULT NOW()
+    )""")
     c.execute("""
-        CREATE TABLE IF NOT EXISTS promo_codes (
-            id SERIAL PRIMARY KEY,
-            code TEXT UNIQUE,
-            reward_type TEXT,
-            reward_value INTEGER,
-            max_uses INTEGER DEFAULT 1,
-            used_count INTEGER DEFAULT 0,
-            expires_at TIMESTAMP,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
+    CREATE TABLE IF NOT EXISTS promo_codes (
+        id SERIAL PRIMARY KEY,
+        code TEXT UNIQUE,
+        reward_type TEXT,
+        reward_value INTEGER,
+        max_uses INTEGER DEFAULT 1,
+        used_count INTEGER DEFAULT 0,
+        expires_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW()
+    )""")
     c.execute("""
-        CREATE TABLE IF NOT EXISTS promo_uses (
-            user_id BIGINT,
-            code TEXT,
-            PRIMARY KEY (user_id, code)
-        )
-    """)
+    CREATE TABLE IF NOT EXISTS promo_uses (
+        user_id BIGINT, code TEXT,
+        PRIMARY KEY (user_id, code)
+    )""")
     c.execute("UPDATE users SET is_admin=TRUE WHERE user_id=%s", (ADMIN_ID,))
     conn.commit()
     conn.close()
 
-def ensure_user(user_id, username=None, full_name=None, referred_by=None):
+def rnd_code(n=8):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
+
+def ensure_user(uid, username=None, full_name=None, referred_by=None):
     try:
-        conn = get_conn()
+        conn = db()
         c = conn.cursor()
-        code = generate_referral_code()
-        aff_code = generate_promo_code()
-        is_admin = user_id == ADMIN_ID
+        is_admin = uid == ADMIN_ID
         c.execute("""
-            INSERT INTO users (user_id, username, full_name, referral_code, referred_by, affiliate_code, is_admin)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO users (user_id, username, full_name, referral_code, affiliate_code, referred_by, is_admin)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (user_id) DO UPDATE SET
-                username = EXCLUDED.username,
-                full_name = EXCLUDED.full_name
-        """, (user_id, username, full_name, code, referred_by, aff_code, is_admin))
+                username=EXCLUDED.username, full_name=EXCLUDED.full_name
+        """, (uid, username, full_name, rnd_code(8), rnd_code(10), referred_by, is_admin))
         conn.commit()
         if referred_by:
-            c.execute("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = %s", (referred_by,))
+            c.execute("UPDATE users SET referral_count=referral_count+1 WHERE user_id=%s", (referred_by,))
             conn.commit()
         conn.close()
-    except:
-        pass
+    except: pass
 
-def get_user(user_id):
+def get_user(uid):
+    default = {
+        "plan":"free","expires_at":None,"is_blocked":False,"is_admin":False,
+        "full_name":None,"username":None,"language":"en","language_changed_at":None,
+        "coins":0,"warning_count":0,"referral_code":None,"affiliate_code":None,
+        "referred_by":None,"referral_count":0,"affiliate_earnings":0,
+        "claimed_standard":False,"claimed_premium":False,"streak_count":0,
+        "last_gift_claim":None,"streak_claimed":False,"group_plan":"none",
+        "total_messages":0,"achievement_100k":False
+    }
     try:
-        conn = get_conn()
+        conn = db()
         c = conn.cursor()
-        c.execute("""
-            SELECT plan, expires_at, is_blocked, full_name, username,
-                   referral_code, referral_count, claimed_standard, claimed_premium,
-                   language, language_changed_at, streak_count, last_gift_claim,
-                   streak_claimed, group_plan, total_messages, coins, warning_count,
-                   affiliate_code, affiliate_earnings, achievement_100k, is_admin
-            FROM users WHERE user_id = %s
-        """, (user_id,))
+        c.execute("""SELECT plan,expires_at,is_blocked,is_admin,full_name,username,
+            language,language_changed_at,coins,warning_count,referral_code,affiliate_code,
+            referred_by,referral_count,affiliate_earnings,claimed_standard,claimed_premium,
+            streak_count,last_gift_claim,streak_claimed,group_plan,total_messages,achievement_100k
+            FROM users WHERE user_id=%s""", (uid,))
         row = c.fetchone()
         conn.close()
-        if not row:
-            return {"plan": "free", "expires_at": None, "is_blocked": False, "full_name": None,
-                    "username": None, "referral_code": None, "referral_count": 0,
-                    "claimed_standard": False, "claimed_premium": False, "language": "en",
-                    "language_changed_at": None, "streak_count": 0, "last_gift_claim": None,
-                    "streak_claimed": False, "group_plan": "none", "total_messages": 0,
-                    "coins": 0, "warning_count": 0, "affiliate_code": None,
-                    "affiliate_earnings": 0, "achievement_100k": False, "is_admin": False}
-        plan, expires_at, is_blocked, full_name, username, referral_code, referral_count, \
-        claimed_standard, claimed_premium, language, language_changed_at, streak_count, \
-        last_gift_claim, streak_claimed, group_plan, total_messages, coins, warning_count, \
-        affiliate_code, affiliate_earnings, achievement_100k, is_admin = row
-        if not is_admin and expires_at and datetime.now() > expires_at and plan != 'free':
-            set_plan(user_id, "free", None)
-            plan = "free"
-            expires_at = None
-        return {
-            "plan": plan, "expires_at": expires_at, "is_blocked": is_blocked,
-            "full_name": full_name, "username": username, "referral_code": referral_code,
-            "referral_count": referral_count or 0, "claimed_standard": claimed_standard or False,
-            "claimed_premium": claimed_premium or False, "language": language or "en",
-            "language_changed_at": language_changed_at, "streak_count": streak_count or 0,
-            "last_gift_claim": last_gift_claim, "streak_claimed": streak_claimed or False,
-            "group_plan": group_plan or "none", "total_messages": total_messages or 0,
-            "coins": coins or 0, "warning_count": warning_count or 0,
-            "affiliate_code": affiliate_code, "affiliate_earnings": affiliate_earnings or 0,
-            "achievement_100k": achievement_100k or False, "is_admin": is_admin or False
-        }
-    except:
-        return {"plan": "free", "expires_at": None, "is_blocked": False, "full_name": None,
-                "username": None, "referral_code": None, "referral_count": 0,
-                "claimed_standard": False, "claimed_premium": False, "language": "en",
-                "language_changed_at": None, "streak_count": 0, "last_gift_claim": None,
-                "streak_claimed": False, "group_plan": "none", "total_messages": 0,
-                "coins": 0, "warning_count": 0, "affiliate_code": None,
-                "affiliate_earnings": 0, "achievement_100k": False, "is_admin": False}
+        if not row: return default
+        keys = ["plan","expires_at","is_blocked","is_admin","full_name","username",
+                "language","language_changed_at","coins","warning_count","referral_code",
+                "affiliate_code","referred_by","referral_count","affiliate_earnings",
+                "claimed_standard","claimed_premium","streak_count","last_gift_claim",
+                "streak_claimed","group_plan","total_messages","achievement_100k"]
+        u = dict(zip(keys, row))
+        for k in ["is_blocked","is_admin","claimed_standard","claimed_premium","streak_claimed","achievement_100k"]:
+            u[k] = bool(u.get(k))
+        for k in ["coins","warning_count","referral_count","affiliate_earnings","streak_count","total_messages"]:
+            u[k] = u.get(k) or 0
+        u["language"] = u.get("language") or "en"
+        u["group_plan"] = u.get("group_plan") or "none"
+        if not u["is_admin"] and u["expires_at"] and datetime.now() > u["expires_at"] and u["plan"] != "free":
+            set_plan(uid, "free", None)
+            u["plan"] = "free"; u["expires_at"] = None
+        return u
+    except: return default
+
+def set_plan(uid, plan, days=30):
+    try:
+        conn = db(); c = conn.cursor()
+        exp = datetime.now() + timedelta(days=days) if days else None
+        c.execute("UPDATE users SET plan=%s,expires_at=%s WHERE user_id=%s", (plan, exp, uid))
+        conn.commit(); conn.close()
+    except: pass
+
+def set_blocked(uid, blocked):
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("UPDATE users SET is_blocked=%s WHERE user_id=%s", (blocked, uid))
+        conn.commit(); conn.close()
+    except: pass
+
+def set_language(uid, lang):
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("UPDATE users SET language=%s,language_changed_at=%s WHERE user_id=%s",
+                  (lang, datetime.now(), uid))
+        conn.commit(); conn.close()
+    except: pass
+
+def add_coins(uid, amount):
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("UPDATE users SET coins=coins+%s WHERE user_id=%s", (amount, uid))
+        conn.commit(); conn.close()
+    except: pass
+
+def add_warning(uid):
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("UPDATE users SET warning_count=warning_count+1 WHERE user_id=%s", (uid,))
+        c.execute("SELECT warning_count FROM users WHERE user_id=%s", (uid,))
+        n = c.fetchone()[0]; conn.commit(); conn.close()
+        return n
+    except: return 0
+
+def inc_messages(uid, is_admin=False):
+    if is_admin: return 0
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("UPDATE users SET total_messages=total_messages+1,coins=coins+%s WHERE user_id=%s",
+                  (COINS_PER_MSG, uid))
+        conn.commit()
+        c.execute("SELECT total_messages,referred_by FROM users WHERE user_id=%s", (uid,))
+        row = c.fetchone(); conn.close()
+        if row:
+            total, ref = row
+            if ref:
+                bonus = int(COINS_PER_MSG * AFFILIATE_PCT / 100)
+                add_coins(ref, bonus)
+                try:
+                    conn2 = db(); c2 = conn2.cursor()
+                    c2.execute("UPDATE users SET affiliate_earnings=affiliate_earnings+%s WHERE user_id=%s", (bonus, ref))
+                    conn2.commit(); conn2.close()
+                except: pass
+            return total
+        return 0
+    except: return 0
+
+def check_limit(uid, feature, limit):
+    if limit == -1: return True
+    if limit == 0: return False
+    try:
+        conn = db(); c = conn.cursor()
+        today = datetime.now().date()
+        c.execute("SELECT last_reset FROM users WHERE user_id=%s", (uid,))
+        row = c.fetchone()
+        if row and row[0] < today:
+            c.execute("""UPDATE users SET usage_chat=0,usage_search=0,usage_image=0,
+                usage_post=0,usage_biznes=0,usage_pdf=0,usage_cv=0,usage_email=0,
+                usage_tts=0,last_reset=%s WHERE user_id=%s""", (today, uid))
+            conn.commit()
+        c.execute(f"SELECT usage_{feature} FROM users WHERE user_id=%s", (uid,))
+        row = c.fetchone(); usage = row[0] if row else 0
+        if usage >= limit: conn.close(); return False
+        c.execute(f"UPDATE users SET usage_{feature}=usage_{feature}+1 WHERE user_id=%s", (uid,))
+        conn.commit(); conn.close(); return True
+    except: return True
+
+def get_limits(plan, is_admin=False):
+    all_inf = {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word","tts","imagine","translate","code","document"]}
+    if is_admin: return all_inf
+    if plan == "premium": return all_inf
+    if plan == "standard":
+        return {"chat":30,"search":30,"image":30,"post":30,"biznes":30,"pdf":30,
+                "cv":30,"email":30,"voice":0,"pptx":0,"word":0,"tts":30,
+                "imagine":0,"translate":30,"code":30,"document":30}
+    return {"chat":20,"search":20,"image":20,"post":20,"biznes":20,"pdf":0,
+            "cv":0,"email":0,"voice":0,"pptx":0,"word":0,"tts":0,
+            "imagine":0,"translate":20,"code":20,"document":0}
+
+def get_memory(uid):
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT name,facts FROM user_memory WHERE user_id=%s", (uid,))
+        row = c.fetchone(); conn.close()
+        return {"name": row[0], "facts": row[1]} if row else None
+    except: return None
+
+def save_memory(uid, name, facts):
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("""INSERT INTO user_memory(user_id,name,facts) VALUES(%s,%s,%s)
+            ON CONFLICT(user_id) DO UPDATE SET name=%s,facts=%s""",
+            (uid, name, facts, name, facts))
+        conn.commit(); conn.close()
+    except: pass
 
 def is_group_active(chat_id):
     try:
-        conn = get_conn()
-        c = conn.cursor()
+        conn = db(); c = conn.cursor()
         c.execute("SELECT 1 FROM group_modes WHERE chat_id=%s", (chat_id,))
-        result = c.fetchone()
-        conn.close()
-        return result is not None
-    except:
-        return False
+        r = c.fetchone(); conn.close(); return r is not None
+    except: return False
 
-def activate_group(chat_id, user_id):
+def activate_group(chat_id, uid):
     try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("INSERT INTO group_modes (chat_id, activated_by) VALUES (%s, %s) ON CONFLICT DO NOTHING", (chat_id, user_id))
-        conn.commit()
-        conn.close()
-    except:
-        pass
+        conn = db(); c = conn.cursor()
+        c.execute("INSERT INTO group_modes(chat_id,activated_by) VALUES(%s,%s) ON CONFLICT DO NOTHING",
+                  (chat_id, uid))
+        conn.commit(); conn.close()
+    except: pass
 
-def set_plan(user_id, plan, days=30):
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        expires_at = datetime.now() + timedelta(days=days) if days else None
-        c.execute("UPDATE users SET plan=%s, expires_at=%s WHERE user_id=%s", (plan, expires_at, user_id))
-        conn.commit()
-        conn.close()
-    except:
-        pass
-
-def set_blocked(user_id, blocked):
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("UPDATE users SET is_blocked=%s WHERE user_id=%s", (blocked, user_id))
-        conn.commit()
-        conn.close()
-    except:
-        pass
-
-def set_language(user_id, lang):
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("UPDATE users SET language=%s, language_changed_at=%s WHERE user_id=%s",
-                  (lang, datetime.now(), user_id))
-        conn.commit()
-        conn.close()
-    except:
-        pass
-
-def add_coins(user_id, amount):
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("UPDATE users SET coins = coins + %s WHERE user_id=%s", (amount, user_id))
-        conn.commit()
-        conn.close()
-    except:
-        pass
-
-def add_warning(user_id):
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("UPDATE users SET warning_count = warning_count + 1 WHERE user_id=%s", (user_id,))
-        c.execute("SELECT warning_count FROM users WHERE user_id=%s", (user_id,))
-        count = c.fetchone()[0]
-        conn.commit()
-        conn.close()
-        return count
-    except:
-        return 0
-
-def increment_messages(user_id, is_admin=False):
-    if is_admin:
-        return 0
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("""
-            UPDATE users SET total_messages = total_messages + 1, coins = coins + %s
-            WHERE user_id=%s
-        """, (COINS_PER_MESSAGE, user_id))
-        conn.commit()
-        c.execute("SELECT total_messages, referred_by FROM users WHERE user_id=%s", (user_id,))
-        row = c.fetchone()
-        conn.close()
-        if row:
-            total, referred_by = row
-            if referred_by:
-                bonus = int(COINS_PER_MESSAGE * AFFILIATE_PERCENT / 100)
-                add_coins(referred_by, bonus)
-                try:
-                    conn2 = get_conn()
-                    c2 = conn2.cursor()
-                    c2.execute("UPDATE users SET affiliate_earnings = affiliate_earnings + %s WHERE user_id=%s", (bonus, referred_by))
-                    conn2.commit()
-                    conn2.close()
-                except:
-                    pass
-            return total
-        return 0
-    except:
-        return 0
-
-def get_limits(plan, is_admin=False):
-    if is_admin:
-        return {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word","tts","imagine","translate","code","document"]}
-    if plan == "premium":
-        return {k: -1 for k in ["chat","search","image","post","biznes","pdf","cv","email","voice","pptx","word","tts","imagine","translate","code","document"]}
-    elif plan == "standard":
-        return {
-            "chat": 30, "search": 30, "image": 30, "post": 30, "biznes": 30,
-            "pdf": 30, "cv": 30, "email": 30, "voice": 0, "pptx": 0, "word": 0,
-            "tts": 30, "imagine": 0, "translate": 30, "code": 30, "document": 30
-        }
+# ═══════════════════════════════════════════════════════════
+#                   AI & EXTERNAL APIs
+# ═══════════════════════════════════════════════════════════
+async def ai_chat(uid, text, search=False, limits=None):
+    mem = get_memory(uid)
+    mem_ctx = ""
+    if mem and (mem.get("name") or mem.get("facts")):
+        mem_ctx = f"User: name={mem['name']}, facts={mem['facts']}. "
+    sys = (
+        "You are ChatBot Pro — a professional, helpful AI assistant. "
+        "CRITICAL: Always reply in the EXACT same language as the user's message. "
+        "If user writes Uzbek → reply Uzbek. English → English. Russian → Russian. "
+        "If asked to switch language, switch immediately without hesitation. "
+        "If asked who created you, who is your owner, or who made you → always say: "
+        "'My creator and owner is @temur_uzb7779' in the same language. "
+        "Be accurate, concise, and professional. "
+        + mem_ctx
+    )
+    if uid not in user_histories:
+        user_histories[uid] = [{"role": "system", "content": sys}]
     else:
-        return {
-            "chat": 20, "search": 20, "image": 20, "post": 20, "biznes": 20,
-            "pdf": 0, "cv": 0, "email": 0, "voice": 0, "pptx": 0, "word": 0,
-            "tts": 0, "imagine": 0, "translate": 20, "code": 20, "document": 0
-        }
+        user_histories[uid][0]["content"] = sys
+    content = text
+    if search and limits and limits.get("search") != 0:
+        kws = ["today","now","current","latest","news","price","weather","rate",
+               "bugun","hozir","narx","kurs","yangilik","ob-havo","сегодня","сейчас","курс"]
+        if any(k in text.lower() for k in kws):
+            content = f"{text}\n[Note: Answer based on your knowledge about current events]"
+    user_histories[uid].append({"role": "user", "content": content})
+    r = groq.chat.completions.create(model="llama-3.3-70b-versatile", messages=user_histories[uid])
+    reply = r.choices[0].message.content
+    user_histories[uid].append({"role": "assistant", "content": reply})
+    return reply
 
-def check_limit(user_id, feature, limit):
-    if limit == -1:
-        return True
-    if limit == 0:
-        return False
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        today = datetime.now().date()
-        c.execute("SELECT last_reset FROM users WHERE user_id = %s", (user_id,))
-        row = c.fetchone()
-        if row and row[0] < today:
-            c.execute("""
-                UPDATE users SET usage_chat=0, usage_search=0, usage_image=0,
-                usage_post=0, usage_biznes=0, usage_pdf=0, usage_cv=0,
-                usage_email=0, usage_tts=0, last_reset=%s WHERE user_id=%s
-            """, (today, user_id))
-            conn.commit()
-        c.execute(f"SELECT usage_{feature} FROM users WHERE user_id = %s", (user_id,))
-        row = c.fetchone()
-        usage = row[0] if row else 0
-        if usage >= limit:
-            conn.close()
-            return False
-        c.execute(f"UPDATE users SET usage_{feature} = usage_{feature} + 1 WHERE user_id = %s", (user_id,))
-        conn.commit()
-        conn.close()
-        return True
-    except:
-        return True
+async def ai_once(prompt):
+    r = groq.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return r.choices[0].message.content
 
-def get_memory(user_id):
+async def update_memory_async(uid, user_text, reply):
+    mem = get_memory(uid)
+    cf = mem["facts"] if mem else ""
+    cn = mem["name"] if mem else ""
     try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT name, facts FROM user_memory WHERE user_id = %s", (user_id,))
-        row = c.fetchone()
-        conn.close()
-        return {"name": row[0], "facts": row[1]} if row else None
-    except:
-        return None
-
-def save_memory(user_id, name, facts):
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("""
-            INSERT INTO user_memory (user_id, name, facts) VALUES (%s, %s, %s)
-            ON CONFLICT (user_id) DO UPDATE SET name=%s, facts=%s
-        """, (user_id, name, facts, name, facts))
-        conn.commit()
-        conn.close()
-    except:
-        pass
-
-async def update_memory(user_id, user_text, reply):
-    memory = get_memory(user_id)
-    current_facts = memory["facts"] if memory else ""
-    current_name = memory["name"] if memory else ""
-    prompt = f"""Extract user info.
-Current name: {current_name}, facts: {current_facts}
-User: {user_text}
-Reply ONLY JSON: {{"name": "name or empty", "facts": "short facts"}}"""
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}]
+        r = await ai_once(
+            f"Extract name and facts. Current: name={cn}, facts={cf}\n"
+            f"User: {user_text}\nAssistant: {reply}\n"
+            f"Reply ONLY JSON: {{\"name\":\"...\",\"facts\":\"...\"}}"
         )
-        content = response.choices[0].message.content.strip()
-        if "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"): content = content[4:]
-        data = json.loads(content)
-        save_memory(user_id, data.get("name", current_name), data.get("facts", current_facts))
-    except:
-        pass
+        r = r.strip()
+        if "```" in r:
+            r = r.split("```")[1]
+            if r.startswith("json"): r = r[4:]
+        d = json.loads(r)
+        save_memory(uid, d.get("name", cn), d.get("facts", cf))
+    except: pass
 
-def needs_search(text):
-    return any(k in text.lower() for k in SEARCH_KEYWORDS)
+def get_weather(city):
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric"
+        r = requests.get(url, timeout=10).json()
+        if r.get("cod") != 200: return None
+        w = r["weather"][0]
+        m = r["main"]
+        wind = r["wind"]
+        emoji = {"Clear":"☀️","Clouds":"☁️","Rain":"🌧️","Snow":"❄️","Thunderstorm":"⛈️","Drizzle":"🌦️","Mist":"🌫️","Fog":"🌫️"}.get(w["main"], "🌤")
+        return (
+            f"🌍 *{r['name']}, {r['sys']['country']}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{emoji} *{w['description'].capitalize()}*\n\n"
+            f"🌡 *Temperature:* {m['temp']:.1f}°C (feels {m['feels_like']:.1f}°C)\n"
+            f"💧 *Humidity:* {m['humidity']}%\n"
+            f"💨 *Wind:* {wind['speed']} m/s\n"
+            f"👁 *Visibility:* {r.get('visibility',0)//1000} km\n"
+            f"🔼 *Max:* {m['temp_max']:.1f}°C | 🔽 *Min:* {m['temp_min']:.1f}°C"
+        )
+    except: return None
 
-def create_pptx(title, slides_data):
+def get_crypto(coin):
+    try:
+        headers = {"x-cg-demo-api-key": COINGECKO_API_KEY} if COINGECKO_API_KEY else {}
+        url = f"https://api.coingecko.com/api/v3/coins/{coin.lower()}?localization=false&tickers=false&community_data=false&developer_data=false"
+        r = requests.get(url, headers=headers, timeout=10).json()
+        if "error" in r: return None
+        md = r["market_data"]
+        price = md["current_price"]["usd"]
+        change24 = md["price_change_percentage_24h"] or 0
+        change7d = md["price_change_percentage_7d"] or 0
+        mc = md["market_cap"]["usd"]
+        vol = md["total_volume"]["usd"]
+        high = md["high_24h"]["usd"]
+        low = md["low_24h"]["usd"]
+        arrow = "📈" if change24 >= 0 else "📉"
+        return (
+            f"💰 *{r['name']} ({r['symbol'].upper()})*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 *Price:* ${price:,.4f}\n"
+            f"{arrow} *24h:* {change24:+.2f}%\n"
+            f"📊 *7d:* {change7d:+.2f}%\n"
+            f"📈 *High 24h:* ${high:,.4f}\n"
+            f"📉 *Low 24h:* ${low:,.4f}\n"
+            f"🏦 *Market Cap:* ${mc:,.0f}\n"
+            f"📦 *Volume 24h:* ${vol:,.0f}\n"
+            f"🏆 *Rank:* #{r.get('market_cap_rank','N/A')}"
+        )
+    except: return None
+
+def get_news():
+    try:
+        r = groq.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content":
+                "Give me 5 latest important world news headlines with brief descriptions. "
+                "Format each as: 📌 **Title**\n Brief description\n"
+            }]
+        )
+        return r.choices[0].message.content
+    except: return None
+
+def generate_image(prompt):
+    try:
+        url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(prompt)}?width=1024&height=1024&nologo=true&enhance=true"
+        r = requests.get(url, timeout=60)
+        if r.status_code == 200: return r.content
+        return None
+    except: return None
+
+def detect_gtts(text):
+    try:
+        lang = detect(text)
+        return GTTS_LANG_MAP.get(lang, "en")
+    except: return "en"
+
+def is_bad(text):
+    tl = text.lower()
+    return any(w in tl for w in BAD_WORDS)
+
+# ═══════════════════════════════════════════════════════════
+#                   FILE CREATORS
+# ═══════════════════════════════════════════════════════════
+def make_pptx(title, slides):
     prs = Presentation()
     prs.slide_width = Inches(13.33)
     prs.slide_height = Inches(7.5)
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.background.fill.solid()
-    slide.background.fill.fore_color.rgb = RGBColor(0x1E, 0x1E, 0x2E)
-    title_box = slide.shapes.title
-    title_box.text = title
-    title_box.text_frame.paragraphs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-    title_box.text_frame.paragraphs[0].font.size = Pt(40)
-    title_box.text_frame.paragraphs[0].font.bold = True
-    for s in slides_data:
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.background.fill.solid()
-        slide.background.fill.fore_color.rgb = RGBColor(0x1E, 0x1E, 0x2E)
-        t = slide.shapes.title
+    # Title slide
+    sl = prs.slides.add_slide(prs.slide_layouts[0])
+    sl.background.fill.solid()
+    sl.background.fill.fore_color.rgb = RGBColor(0x0F, 0x0F, 0x1A)
+    tb = sl.shapes.title
+    tb.text = title
+    tb.text_frame.paragraphs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    tb.text_frame.paragraphs[0].font.size = Pt(40)
+    tb.text_frame.paragraphs[0].font.bold = True
+    for s in slides:
+        sl = prs.slides.add_slide(prs.slide_layouts[1])
+        sl.background.fill.solid()
+        sl.background.fill.fore_color.rgb = RGBColor(0x0F, 0x0F, 0x1A)
+        t = sl.shapes.title
         t.text = s["title"]
         t.text_frame.paragraphs[0].font.color.rgb = RGBColor(0x89, 0xB4, 0xFA)
         t.text_frame.paragraphs[0].font.size = Pt(28)
         t.text_frame.paragraphs[0].font.bold = True
-        tf = slide.placeholders[1].text_frame
+        tf = sl.placeholders[1].text_frame
         tf.clear()
-        for i, point in enumerate(s["points"]):
+        for i, pt in enumerate(s["points"]):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-            p.text = f"• {point}"
+            p.text = f"▸ {pt}"
             p.font.color.rgb = RGBColor(0xCD, 0xD6, 0xF4)
             p.font.size = Pt(18)
-    prs.save("presentation.pptx")
-    return "presentation.pptx"
+    prs.save("pres.pptx")
+    return "pres.pptx"
 
-def create_docx(title, sections):
+def make_docx(title, sections):
     doc = Document()
     h = doc.add_heading(title, 0)
-    h.runs[0].font.color.rgb = DocRGB(0x1E, 0x3A, 0x8A)
-    for section in sections:
-        doc.add_heading(section["title"], level=1)
-        for point in section["points"]:
-            doc.add_paragraph(point, style="List Bullet")
+    if h.runs: h.runs[0].font.color.rgb = DocRGB(0x1E, 0x3A, 0x8A)
+    for sec in sections:
+        doc.add_heading(sec["title"], level=1)
+        for pt in sec["points"]:
+            doc.add_paragraph(pt, style="List Bullet")
         doc.add_paragraph()
-    doc.save("document.docx")
-    return "document.docx"
+    doc.save("doc.docx")
+    return "doc.docx"
 
-async def ai_generate(prompt):
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
+# ═══════════════════════════════════════════════════════════
+#                   PLAN EMOJI HELPER
+# ═══════════════════════════════════════════════════════════
+def plan_display(u):
+    lang = u["language"]
+    if u["is_admin"]:
+        return "👑", tx(lang, "plan_admin")
+    p = u["plan"]
+    emoji = {"free":"🆓","standard":"⭐","premium":"💎"}.get(p,"🆓")
+    key = {"free":"plan_free","standard":"plan_standard","premium":"plan_premium"}.get(p,"plan_free")
+    return emoji, tx(lang, key)
 
-async def generate_content(topic, doc_type):
-    if doc_type == "pptx":
-        prompt = f"""Create presentation for: '{topic}'. ONLY JSON:
-{{"title":"title","slides":[{{"title":"s","points":["p1","p2","p3"]}}]}}
-Min 5 slides. Same language as topic."""
-    else:
-        prompt = f"""Create Word doc for: '{topic}'. ONLY JSON:
-{{"title":"title","sections":[{{"title":"s","points":["p1","p2","p3"]}}]}}
-Min 4 sections. Same language as topic."""
-    return await ai_generate(prompt)
+def expires_str(u):
+    if u["is_admin"]: return "∞"
+    if u.get("expires_at"): return u["expires_at"].strftime("%d.%m.%Y")
+    return "—"
 
-async def generate_image(prompt):
-    url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(prompt)}?width=1024&height=1024&nologo=true"
-    response = requests.get(url, timeout=60)
-    if response.status_code == 200:
-        return response.content
-    return None
-
-async def ai_reply(user_id, user_text, lang, search_enabled=True, limits=None):
-    memory = get_memory(user_id)
-    memory_context = ""
-    if memory and (memory.get("name") or memory.get("facts")):
-        memory_context = f"User info — name: {memory['name']}, facts: {memory['facts']}. "
-    system_prompt = (
-        "You are a helpful AI assistant. "
-        "Always reply in the SAME language as the user's current message. "
-        "Uzbek→Uzbek, English→English, Russian→Russian. "
-        "If asked to switch language, do it immediately. "
-        "Be accurate, helpful and concise. "
-        + memory_context
-    )
-    if user_id not in user_histories:
-        user_histories[user_id] = [{"role": "system", "content": system_prompt}]
-    else:
-        user_histories[user_id][0]["content"] = system_prompt
-    if search_enabled and limits and limits.get("search") != 0 and needs_search(user_text):
-        try:
-            search_results = tavily.search(query=user_text, max_results=3)
-            search_content = "\n\n".join([f"Source: {r['url']}\n{r['content']}" for r in search_results.get("results", [])])
-            message_content = f"Question: {user_text}\n\nWeb results:\n{search_content}\n\nAnswer in same language."
-        except:
-            message_content = user_text
-    else:
-        message_content = user_text
-    user_histories[user_id].append({"role": "user", "content": message_content})
-    response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=user_histories[user_id])
-    reply = response.choices[0].message.content
-    user_histories[user_id].append({"role": "assistant", "content": reply})
-    return reply
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ═══════════════════════════════════════════════════════════
+#                   COMMAND HANDLERS
+# ═══════════════════════════════════════════════════════════
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     referred_by = None
-    if context.args:
+    if ctx.args:
         try:
-            ref_code = context.args[0]
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("SELECT user_id FROM users WHERE referral_code=%s OR affiliate_code=%s", (ref_code, ref_code))
-            row = c.fetchone()
-            conn.close()
-            if row and row[0] != user.id:
-                referred_by = row[0]
-        except:
-            pass
+            code = ctx.args[0]
+            conn = db(); c = conn.cursor()
+            c.execute("SELECT user_id FROM users WHERE referral_code=%s OR affiliate_code=%s", (code, code))
+            row = c.fetchone(); conn.close()
+            if row and row[0] != user.id: referred_by = row[0]
+        except: pass
     ensure_user(user.id, user.username, user.full_name, referred_by)
     u = get_user(user.id)
     lang = u["language"]
-    if u["is_admin"]:
-        plan = "ADMIN"
-        plan_emoji = "👑"
-    else:
-        plan = u["plan"].upper()
-        plan_emoji = {"FREE": "🆓", "STANDARD": "⭐", "PREMIUM": "💎"}.get(plan, "🆓")
-    await update.message.reply_text(get_text(lang, "welcome", plan_emoji=plan_emoji, plan=plan, coins=u["coins"]))
-
-async def coins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
-    u = get_user(user.id)
-    lang = u["language"]
-    keyboard = []
-    if u["coins"] >= COINS_STANDARD:
-        keyboard.append([InlineKeyboardButton(get_text(lang, "coins_standard_btn"), callback_data="coins_buy_standard")])
-    if u["coins"] >= COINS_PREMIUM:
-        keyboard.append([InlineKeyboardButton(get_text(lang, "coins_premium_btn"), callback_data="coins_buy_premium")])
+    pe, pn = plan_display(u)
     await update.message.reply_text(
-        get_text(lang, "coins_info", coins=u["coins"], standard=COINS_STANDARD, premium=COINS_PREMIUM),
-        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
+        tx(lang, "welcome", bot=BOT_NAME, plan_emoji=pe, plan=pn, coins=u["coins"]),
+        parse_mode="Markdown"
     )
 
-async def affiliate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
     lang = u["language"]
-    bot = await context.bot.get_me()
+    await update.message.reply_text(
+        tx(lang, "help", img_stars=STARS_IMAGINE),
+        parse_mode="Markdown"
+    )
+
+async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    user_histories[user.id] = []
+    await update.message.reply_text(tx(u["language"], "cleared"), parse_mode="Markdown")
+
+async def weather_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    city = " ".join(ctx.args) if ctx.args else ""
+    if not city:
+        await update.message.reply_text(tx(lang, "ex_weather"), parse_mode="Markdown")
+        return
+    result = get_weather(city)
+    if result:
+        await update.message.reply_text(result, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(tx(lang, "weather_err"), parse_mode="Markdown")
+
+async def crypto_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    coin = ctx.args[0] if ctx.args else ""
+    if not coin:
+        await update.message.reply_text(tx(lang, "ex_crypto"), parse_mode="Markdown")
+        return
+    result = get_crypto(coin)
+    if result:
+        await update.message.reply_text(result, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(tx(lang, "crypto_err"), parse_mode="Markdown")
+
+async def news_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    await update.message.reply_text("⏳ Fetching latest news...")
+    result = get_news()
+    if result:
+        await update.message.reply_text(f"📰 *Latest News*\n━━━━━━━━━━━━━━━━━━━━\n\n{result}", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("❌ Could not fetch news. Try again.")
+
+async def language_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    lca = u["language_changed_at"]
+    if lca and datetime.now() - lca < timedelta(hours=24):
+        await update.message.reply_text(tx(lang, "lang_cooldown"), parse_mode="Markdown")
+        return
+    kb = []
+    row = []
+    for code, (flag, name) in LANGUAGES.items():
+        row.append(InlineKeyboardButton(f"{flag} {name}", callback_data=f"lang_{code}"))
+        if len(row) == 2: kb.append(row); row = []
+    if row: kb.append(row)
+    await update.message.reply_text(tx(lang, "choose_lang"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def updateplan_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    pe, pn = plan_display(u)
+    exp = expires_str(u)
+    kb = [
+        [InlineKeyboardButton(tx(lang,"btn_std_stars",s=STARS_STANDARD), callback_data="stars_std"),
+         InlineKeyboardButton(tx(lang,"btn_prm_stars",s=STARS_PREMIUM), callback_data="stars_prm")],
+        [InlineKeyboardButton(tx(lang,"btn_std_coins",c=COINS_STANDARD), callback_data="coins_std"),
+         InlineKeyboardButton(tx(lang,"btn_prm_coins",c=COINS_PREMIUM), callback_data="coins_prm")],
+        [InlineKeyboardButton(tx(lang,"btn_std_card",u=USDT_STANDARD), callback_data="card_std"),
+         InlineKeyboardButton(tx(lang,"btn_prm_card",u=USDT_PREMIUM), callback_data="card_prm")],
+        [InlineKeyboardButton(tx(lang,"btn_group",s=STARS_GROUP), callback_data="stars_grp")],
+    ]
+    await update.message.reply_text(
+        tx(lang,"updateplan_txt",
+           u_std=USDT_STANDARD, s_std=STARS_STANDARD, c_std=COINS_STANDARD,
+           u_prm=USDT_PREMIUM, s_prm=STARS_PREMIUM, c_prm=COINS_PREMIUM,
+           s_grp=STARS_GROUP, plan_emoji=pe, plan=pn, expires=exp, coins=u["coins"]),
+        reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"
+    )
+
+async def coins_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    kb = []
+    if u["coins"] >= COINS_STANDARD:
+        kb.append([InlineKeyboardButton(tx(lang,"btn_std_coins",c=COINS_STANDARD), callback_data="coins_std")])
+    if u["coins"] >= COINS_PREMIUM:
+        kb.append([InlineKeyboardButton(tx(lang,"btn_prm_coins",c=COINS_PREMIUM), callback_data="coins_prm")])
+    await update.message.reply_text(
+        tx(lang,"coins_info",coins=u["coins"],cpm=COINS_PER_MSG,aff=AFFILIATE_PCT,std=COINS_STANDARD,prm=COINS_PREMIUM),
+        reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode="Markdown"
+    )
+
+async def referral_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    bot = await ctx.bot.get_me()
+    link = f"https://t.me/{bot.username}?start={u['referral_code']}"
+    count = u["referral_count"]
+    std_s = "✅" if u["claimed_standard"] else ("🔓 Ready!" if count >= 10 else f"{count}/10")
+    prm_s = "✅" if u["claimed_premium"] else ("🔓 Ready!" if count >= 30 else f"{count}/30")
+    kb = []
+    if count >= 10 and not u["claimed_standard"]:
+        kb.append([InlineKeyboardButton(tx(lang,"claim_std"), callback_data="claim_std")])
+    if count >= 30 and not u["claimed_premium"]:
+        kb.append([InlineKeyboardButton(tx(lang,"claim_prm"), callback_data="claim_prm")])
+    await update.message.reply_text(
+        tx(lang,"referral_info",link=link,count=count,std_s=std_s,prm_s=prm_s,aff=AFFILIATE_PCT),
+        reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode="Markdown"
+    )
+
+async def affiliate_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    bot = await ctx.bot.get_me()
     link = f"https://t.me/{bot.username}?start={u['affiliate_code'] or ''}"
     await update.message.reply_text(
-        get_text(lang, "affiliate_info", link=link, count=u["referral_count"], earned=u["affiliate_earnings"])
+        tx(lang,"aff_info",link=link,count=u["referral_count"],earned=u["affiliate_earnings"],aff=AFFILIATE_PCT),
+        parse_mode="Markdown"
     )
 
-async def gift_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def gift_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
     lang = u["language"]
     today = date.today()
-    last_claim = u["last_gift_claim"]
-    if last_claim and last_claim >= today:
-        await update.message.reply_text(get_text(lang, "gift_already"))
+    if u["last_gift_claim"] and u["last_gift_claim"] >= today:
+        await update.message.reply_text(tx(lang,"gift_done"), parse_mode="Markdown")
         return
     streak = u["streak_count"]
-    streak = streak + 1 if (last_claim and (today - last_claim).days == 1) else 1
+    streak = streak + 1 if (u["last_gift_claim"] and (today - u["last_gift_claim"]).days == 1) else 1
     try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("UPDATE users SET streak_count=%s, last_gift_claim=%s, usage_chat=usage_chat+5, coins=coins+25 WHERE user_id=%s",
+        conn = db(); c = conn.cursor()
+        c.execute("UPDATE users SET streak_count=%s,last_gift_claim=%s,usage_chat=usage_chat+5,coins=coins+25 WHERE user_id=%s",
                   (streak, today, user.id))
-        conn.commit()
-        conn.close()
-    except:
-        pass
+        conn.commit(); conn.close()
+    except: pass
     if streak >= 10 and not u["streak_claimed"]:
         set_plan(user.id, "standard", 10)
         try:
-            conn = get_conn()
-            c = conn.cursor()
+            conn = db(); c = conn.cursor()
             c.execute("UPDATE users SET streak_claimed=TRUE WHERE user_id=%s", (user.id,))
-            conn.commit()
-            conn.close()
-        except:
-            pass
-        await update.message.reply_text(get_text(lang, "gift_streak"))
+            conn.commit(); conn.close()
+        except: pass
+        await update.message.reply_text(tx(lang,"gift_streak"), parse_mode="Markdown")
     else:
-        await update.message.reply_text(get_text(lang, "gift_success", streak=streak))
+        await update.message.reply_text(tx(lang,"gift_ok",streak=streak), parse_mode="Markdown")
 
-async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def top_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
     lang = u["language"]
     try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT username, full_name, total_messages, plan, coins FROM users WHERE is_blocked=FALSE ORDER BY total_messages DESC LIMIT 10")
-        rows = c.fetchall()
-        conn.close()
-        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
-        text = f"{get_text(lang, 'top_title')}\n{'─'*28}\n\n"
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT username,full_name,total_messages,plan,coins FROM users WHERE is_blocked=FALSE ORDER BY total_messages DESC LIMIT 10")
+        rows = c.fetchall(); conn.close()
         medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-        for i, row in enumerate(rows):
-            username, full_name, total_msgs, plan, coins = row
-            name = f"@{username}" if username else (full_name or "Anonymous")
-            text += f"{medals[i]} {name} {plan_emoji.get(plan,'🆓')} — {total_msgs} msgs | 🪙{coins}\n"
-        await update.message.reply_text(text)
+        pe_map = {"free":"🆓","standard":"⭐","premium":"💎"}
+        text = tx(lang,"top_title")
+        for i, (uname, fname, msgs, plan, coins) in enumerate(rows):
+            name = f"@{uname}" if uname else (fname or "Anonymous")
+            text += f"{medals[i]} {name} {pe_map.get(plan,'🆓')} — *{msgs:,}* msgs | 🪙{coins:,}\n"
+        await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
-    u = get_user(user.id)
-    lang = u["language"]
-    if not context.args:
-        await update.message.reply_text(get_text(lang, "promo_enter"))
-        return
-    code = context.args[0].upper()
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT reward_type, reward_value, max_uses, used_count, expires_at FROM promo_codes WHERE code=%s", (code,))
-        promo = c.fetchone()
-        if not promo:
-            await update.message.reply_text(get_text(lang, "promo_invalid"))
-            conn.close()
-            return
-        reward_type, reward_value, max_uses, used_count, expires_at = promo
-        if (expires_at and datetime.now() > expires_at) or used_count >= max_uses:
-            await update.message.reply_text(get_text(lang, "promo_invalid"))
-            conn.close()
-            return
-        c.execute("SELECT 1 FROM promo_uses WHERE user_id=%s AND code=%s", (user.id, code))
-        if c.fetchone():
-            await update.message.reply_text(get_text(lang, "promo_used"))
-            conn.close()
-            return
-        c.execute("INSERT INTO promo_uses (user_id, code) VALUES (%s,%s)", (user.id, code))
-        c.execute("UPDATE promo_codes SET used_count=used_count+1 WHERE code=%s", (code,))
-        conn.commit()
-        conn.close()
-        if reward_type == "standard":
-            set_plan(user.id, "standard", reward_value)
-            reward_text = f"⭐ Standard {reward_value} days!"
-        elif reward_type == "premium":
-            set_plan(user.id, "premium", reward_value)
-            reward_text = f"💎 Premium {reward_value} days!"
-        elif reward_type == "coins":
-            add_coins(user.id, reward_value)
-            reward_text = f"🪙 +{reward_value} coins!"
-        else:
-            reward_text = "✅"
-        await update.message.reply_text(get_text(lang, "promo_success", reward=reward_text))
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def createpromo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Access denied!")
-        return
-    if len(context.args) < 3:
-        await update.message.reply_text("Usage: /createpromo [standard/premium/coins] [value] [max_uses]")
-        return
-    try:
-        reward_type, reward_value, max_uses = context.args[0], int(context.args[1]), int(context.args[2])
-        code = generate_promo_code()
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("INSERT INTO promo_codes (code, reward_type, reward_value, max_uses, expires_at) VALUES (%s,%s,%s,%s,%s)",
-                  (code, reward_type, reward_value, max_uses, datetime.now() + timedelta(days=30)))
-        conn.commit()
-        conn.close()
-        await update.message.reply_text(f"✅ Code: `{code}`\nType: {reward_type} | Value: {reward_value} | Uses: {max_uses}", parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
-    u = get_user(user.id)
-    lang = u["language"]
-    keyboard = [[InlineKeyboardButton(get_text(lang, "buy_group"), callback_data="stars_group")]]
-    await update.message.reply_text(get_text(lang, "group_info", stars=STARS_GROUP), reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
-    u = get_user(user.id)
-    lang = u["language"]
-    last_changed = u["language_changed_at"]
-    if last_changed and datetime.now() - last_changed < timedelta(hours=24):
-        await update.message.reply_text(get_text(lang, "language_cooldown"))
-        return
-    keyboard = []
-    row = []
-    for code, (flag, name) in LANGUAGES.items():
-        row.append(InlineKeyboardButton(f"{flag} {name}", callback_data=f"setlang_{code}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    await update.message.reply_text(get_text(lang, "choose_language"), reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
     lang = u["language"]
     try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT usage_chat, usage_search, usage_image, usage_post, usage_biznes, usage_pdf, usage_cv, usage_email, usage_tts FROM users WHERE user_id=%s", (user.id,))
-        row = c.fetchone()
-        conn.close()
-        if not row:
-            await update.message.reply_text("No stats.")
-            return
-        chat, search, image, post, biznes, pdf, cv, email, tts = row
-        plan = "ADMIN" if u["is_admin"] else u["plan"]
-        plan_emoji = "👑" if u["is_admin"] else {"free": "🆓", "standard": "⭐", "premium": "💎"}.get(plan, "🆓")
-        expires = u["expires_at"].strftime("%d.%m.%Y") if u.get("expires_at") and not u["is_admin"] else ("∞" if u["is_admin"] else "—")
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT usage_chat,usage_search,usage_image,usage_post,usage_biznes,usage_pdf,usage_cv,usage_email,usage_tts FROM users WHERE user_id=%s", (user.id,))
+        row = c.fetchone(); conn.close()
+        if not row: await update.message.reply_text("No stats yet."); return
+        chat,search,image,post,biznes,pdf,cv,email,tts = row
+        pe, pn = plan_display(u)
+        exp = expires_str(u)
         await update.message.reply_text(
-            f"{get_text(lang, 'stats_title')}\n{'─'*28}\n\n"
-            f"{plan_emoji} {plan.upper()} | 📅 {expires}\n"
-            f"🪙 {u['coins']} | 👥 {u['referral_count']} | 🔥 {u['streak_count']}d | 💬 {u['total_messages']}\n\n"
-            f"Today: 💬{chat} 🌐{search} 🖼️{image} 📱{post} 💼{biznes} 📄{pdf} 👤{cv} 📧{email} 🔊{tts}"
+            tx(lang,"stats_info",plan_emoji=pe,plan=pn,expires=exp,coins=u["coins"],
+               refs=u["referral_count"],streak=u["streak_count"],total=u["total_messages"],
+               chat=chat,search=search,image=image,pdf=pdf,cv=cv,email=email,tts=tts,post=post),
+            parse_mode="Markdown"
         )
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def promo_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
     lang = u["language"]
-    bot = await context.bot.get_me()
-    link = f"https://t.me/{bot.username}?start={u['referral_code']}"
-    count = u["referral_count"]
-    keyboard = []
-    if count >= 10 and not u["claimed_standard"]:
-        keyboard.append([InlineKeyboardButton(get_text(lang, "claim_standard"), callback_data="claim_standard")])
-    if count >= 30 and not u["claimed_premium"]:
-        keyboard.append([InlineKeyboardButton(get_text(lang, "claim_premium"), callback_data="claim_premium")])
-    standard_status = "✅" if u["claimed_standard"] else ("🔓 Ready!" if count >= 10 else f"{count}/10")
-    premium_status = "✅" if u["claimed_premium"] else ("🔓 Ready!" if count >= 30 else f"{count}/30")
-    await update.message.reply_text(
-        get_text(lang, "referral_title", link=link, count=count, standard_status=standard_status, premium_status=premium_status),
-        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
-    )
+    if not ctx.args:
+        await update.message.reply_text(tx(lang,"promo_enter"), parse_mode="Markdown")
+        return
+    code = ctx.args[0].upper()
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT reward_type,reward_value,max_uses,used_count,expires_at FROM promo_codes WHERE code=%s", (code,))
+        promo = c.fetchone()
+        if not promo:
+            await update.message.reply_text(tx(lang,"promo_bad"), parse_mode="Markdown"); conn.close(); return
+        rtype, rval, maxu, used, exp = promo
+        if (exp and datetime.now() > exp) or used >= maxu:
+            await update.message.reply_text(tx(lang,"promo_bad"), parse_mode="Markdown"); conn.close(); return
+        c.execute("SELECT 1 FROM promo_uses WHERE user_id=%s AND code=%s", (user.id, code))
+        if c.fetchone():
+            await update.message.reply_text(tx(lang,"promo_used"), parse_mode="Markdown"); conn.close(); return
+        c.execute("INSERT INTO promo_uses(user_id,code) VALUES(%s,%s)", (user.id, code))
+        c.execute("UPDATE promo_codes SET used_count=used_count+1 WHERE code=%s", (code,))
+        conn.commit(); conn.close()
+        if rtype == "standard":
+            set_plan(user.id, "standard", rval); reward = f"⭐ Standard {rval} days!"
+        elif rtype == "premium":
+            set_plan(user.id, "premium", rval); reward = f"💎 Premium {rval} days!"
+        elif rtype == "coins":
+            add_coins(user.id, rval); reward = f"🪙 +{rval:,} coins!"
+        else: reward = "✅"
+        await update.message.reply_text(tx(lang,"promo_ok",reward=reward), parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
-async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def createpromo_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!"); return
+    if len(ctx.args) < 3:
+        await update.message.reply_text("Usage: /createpromo [standard/premium/coins] [value] [max_uses]"); return
+    try:
+        rtype, rval, maxu = ctx.args[0], int(ctx.args[1]), int(ctx.args[2])
+        code = rnd_code(10)
+        conn = db(); c = conn.cursor()
+        c.execute("INSERT INTO promo_codes(code,reward_type,reward_value,max_uses,expires_at) VALUES(%s,%s,%s,%s,%s)",
+                  (code, rtype, rval, maxu, datetime.now()+timedelta(days=30)))
+        conn.commit(); conn.close()
+        await update.message.reply_text(
+            f"✅ *Promo Created!*\n\n🎟️ Code: `{code}`\n📦 Type: {rtype}\n💰 Value: {rval}\n👥 Max uses: {maxu}\n⏰ Expires: 30 days",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def group_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    kb = [[InlineKeyboardButton(tx(lang,"btn_group",s=STARS_GROUP), callback_data="stars_grp")]]
+    await update.message.reply_text(tx(lang,"group_info",stars=STARS_GROUP), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def activate_group_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type == "private":
+        await update.message.reply_text("⚠️ This command works only in groups!"); return
+    user = update.effective_user
+    u = get_user(user.id)
+    lang = u["language"]
+    activate_group(chat.id, user.id)
+    await update.message.reply_text(tx(lang,"group_activated"), parse_mode="Markdown")
+
+# ═══════════════════════════════════════════════════════════
+#                   AI FEATURE COMMANDS
+# ═══════════════════════════════════════════════════════════
+async def imagine_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
+    lang = u["language"]
+    if u["is_blocked"]: return
+    limits = get_limits(u["plan"], u["is_admin"])
+    prompt = " ".join(ctx.args)
+    if not prompt:
+        await update.message.reply_text(tx(lang,"ex_imagine"), parse_mode="Markdown"); return
+    if limits["imagine"] == 0:
+        kb = [
+            [InlineKeyboardButton(tx(lang,"btn_upgrade_prm"), callback_data="card_prm")],
+            [InlineKeyboardButton(tx(lang,"btn_imagine",s=STARS_IMAGINE), callback_data=f"img_pay_{prompt[:50]}")],
+        ]
+        await update.message.reply_text(tx(lang,"locked_img",stars=STARS_IMAGINE), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"); return
+    if not check_limit(user.id, "imagine", limits["imagine"]):
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"gen_image"), parse_mode="Markdown")
+    img = generate_image(prompt)
+    if img:
+        buf = io.BytesIO(img); buf.name = "image.png"
+        await update.message.reply_photo(photo=buf, caption=f"🎨 {prompt}")
+    else:
+        await update.message.reply_text("❌ Could not generate image. Try a different prompt.")
+
+async def translate_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
     lang = u["language"]
     limits = get_limits(u["plan"], u["is_admin"])
     if not check_limit(user.id, "translate", limits["translate"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    text = " ".join(context.args)
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    text = " ".join(ctx.args)
     if not text:
-        await update.message.reply_text(get_text(lang, "translate_prompt"))
-        return
-    await update.message.reply_text(get_text(lang, "translating"))
+        await update.message.reply_text(tx(lang,"ex_translate"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"translating"), parse_mode="Markdown")
     try:
-        reply = await ai_generate(f"Translate accurately: {text}")
+        reply = await ai_once(f"Translate accurately: {text}")
         await update.message.reply_text(f"🌐 {reply}")
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def code_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
     lang = u["language"]
     limits = get_limits(u["plan"], u["is_admin"])
     if not check_limit(user.id, "code", limits["code"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    text = " ".join(context.args)
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    text = " ".join(ctx.args)
     if not text:
-        await update.message.reply_text(get_text(lang, "code_prompt"))
-        return
-    await update.message.reply_text(get_text(lang, "writing_code"))
+        await update.message.reply_text(tx(lang,"ex_code"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"writing_code"), parse_mode="Markdown")
     try:
-        reply = await ai_generate(f"Write clean code for: {text}\nExplain how it works.")
+        reply = await ai_once(f"Write clean, well-commented code for: {text}\nExplain how it works. Use appropriate language.")
         await update.message.reply_text(f"💻 {reply}")
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def document_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def document_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1134,379 +1506,46 @@ async def document_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["document"] == 0:
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_standard"), callback_data="buy_standard")]]
-        await update.message.reply_text(get_text(lang, "document_locked"), reply_markup=InlineKeyboardMarkup(keyboard))
-        return
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_std"), callback_data="card_std")]]
+        await update.message.reply_text(tx(lang,"locked_std"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"); return
     if not check_limit(user.id, "document", limits["document"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    text = " ".join(context.args)
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    text = " ".join(ctx.args)
     if not text:
-        await update.message.reply_text(get_text(lang, "document_prompt"))
-        return
-    await update.message.reply_text(get_text(lang, "writing_document"))
+        await update.message.reply_text(tx(lang,"ex_document"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"writing_doc"), parse_mode="Markdown")
     try:
-        reply = await ai_generate(f"Create professional document: {text}\nFormat properly. Same language as request.")
+        reply = await ai_once(f"Create a professional, ready-to-use document: {text}\nFormat properly with all sections. Same language as request.")
         await update.message.reply_text(f"📋 {reply}")
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ai_sound_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
     lang = u["language"]
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
-    prompt = " ".join(context.args)
-    if not prompt:
-        await update.message.reply_text(get_text(lang, "imagine_example"))
-        return
-    if limits["imagine"] == 0:
-        keyboard = [
-            [InlineKeyboardButton(get_text(lang, "upgrade_premium"), callback_data="buy_premium")],
-            [InlineKeyboardButton(get_text(lang, "imagine_pay"), callback_data=f"imagine_pay_{prompt[:50]}")],
-        ]
-        await update.message.reply_text(get_text(lang, "imagine_locked", stars=STARS_IMAGINE), reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-    if not check_limit(user.id, "imagine", limits["imagine"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    await update.message.reply_text(get_text(lang, "generating_image"))
+    if limits["tts"] == 0:
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_std"), callback_data="card_std")]]
+        await update.message.reply_text(tx(lang,"locked_std"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"); return
+    if not check_limit(user.id, "tts", limits["tts"]):
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    text = " ".join(ctx.args)
+    if not text:
+        await update.message.reply_text(tx(lang,"ex_voice"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"gen_voice"), parse_mode="Markdown")
     try:
-        img_bytes = await generate_image(prompt)
-        if img_bytes:
-            buf = io.BytesIO(img_bytes)
-            buf.name = "image.png"
-            await update.message.reply_photo(photo=buf, caption=f"🎨 {prompt}")
-        else:
-            await update.message.reply_text("❌ Could not generate. Try again.")
+        tts_lang = detect_gtts(text)
+        tts = gTTS(text=text, lang=tts_lang)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf); buf.seek(0)
+        await update.message.reply_voice(voice=buf)
     except Exception as e:
-        await update.message.reply_text(f"❌ {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def updateplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
-    u = get_user(user.id)
-    lang = u["language"]
-    if u["is_admin"]:
-        await update.message.reply_text(f"👑 ADMIN — {get_text(lang, 'admin_plan')}")
-        return
-    plan = u["plan"]
-    expires = u["expires_at"].strftime("%d.%m.%Y") if u.get("expires_at") else "—"
-    plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}.get(plan, "🆓")
-    keyboard = [
-        [InlineKeyboardButton(get_text(lang, "buy_standard_stars"), callback_data="stars_standard"),
-         InlineKeyboardButton(get_text(lang, "buy_premium_stars"), callback_data="stars_premium")],
-        [InlineKeyboardButton(get_text(lang, "buy_standard_coins"), callback_data="coins_buy_standard"),
-         InlineKeyboardButton(get_text(lang, "buy_premium_coins"), callback_data="coins_buy_premium")],
-        [InlineKeyboardButton(get_text(lang, "buy_standard"), callback_data="buy_standard"),
-         InlineKeyboardButton(get_text(lang, "buy_premium"), callback_data="buy_premium")],
-        [InlineKeyboardButton(get_text(lang, "buy_group"), callback_data="stars_group")],
-    ]
-    await update.message.reply_text(
-        f"💰 Plans\n{'─'*28}\n\n"
-        f"🆓 FREE: Chat 20/day, Search, Translate, Code\n\n"
-        f"⭐ STANDARD — 10 USDT / {STARS_STANDARD}⭐ / {COINS_STANDARD:,}🪙\n"
-        f"30/day + PDF, CV, Email, AI Voice, Document\n\n"
-        f"💎 PREMIUM — 15 USDT / {STARS_PREMIUM}⭐ / {COINS_PREMIUM:,}🪙\n"
-        f"Unlimited + AI Image, PowerPoint, Word\n\n"
-        f"👥 GROUP — {STARS_GROUP}⭐ ($111.11)\n\n"
-        f"{'─'*28}\n{plan_emoji} {plan.upper()} | 📅 {expires} | 🪙 {u['coins']}",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.pre_checkout_query.answer(ok=True)
-
-async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    payload = update.message.successful_payment.invoice_payload
-    u = get_user(user.id)
-    lang = u["language"]
-    if payload == "standard_stars":
-        set_plan(user.id, "standard", 30)
-        await update.message.reply_text("✅ ⭐ Standard activated for 30 days!")
-    elif payload == "premium_stars":
-        set_plan(user.id, "premium", 30)
-        await update.message.reply_text("✅ 💎 Premium activated for 30 days!")
-    elif payload == "group_stars":
-        await update.message.reply_text(get_text(lang, "group_activated"))
-        await update.message.reply_text("Now add the bot to your group and send /activate_group in the group.")
-    elif payload.startswith("imagine_"):
-        prompt = payload[8:]
-        await update.message.reply_text(get_text(lang, "generating_image"))
-        try:
-            img_bytes = await generate_image(prompt)
-            if img_bytes:
-                buf = io.BytesIO(img_bytes)
-                buf.name = "image.png"
-                await update.message.reply_photo(photo=buf, caption=f"🎨 {prompt}")
-            else:
-                await update.message.reply_text("❌ Could not generate. Try again.")
-        except Exception as e:
-            await update.message.reply_text(f"❌ {str(e)}")
-
-async def activate_group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type == "private":
-        await update.message.reply_text("This command works only in groups!")
-        return
-    user = update.effective_user
-    u = get_user(user.id)
-    chat_id = update.effective_chat.id
-    activate_group(chat_id, user.id)
-    await update.message.reply_text("✅ Bot activated for this group!\n\nMembers can now type 'bot [question]' to get answers.")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = query.from_user.id
-    u = get_user(user_id)
-    lang = u["language"]
-
-    if data.startswith("imagine_pay_"):
-        prompt = data[12:]
-        await context.bot.send_invoice(
-            chat_id=user_id, title="🎨 AI Image",
-            description=f"Generate: {prompt}", payload=f"imagine_{prompt}",
-            currency="XTR", prices=[LabeledPrice("AI Image", STARS_IMAGINE)]
-        )
-    elif data == "stars_standard":
-        await context.bot.send_invoice(chat_id=user_id, title="⭐ Standard",
-            description="Standard 30 days", payload="standard_stars",
-            currency="XTR", prices=[LabeledPrice("Standard 30d", STARS_STANDARD)])
-    elif data == "stars_premium":
-        await context.bot.send_invoice(chat_id=user_id, title="💎 Premium",
-            description="Premium 30 days", payload="premium_stars",
-            currency="XTR", prices=[LabeledPrice("Premium 30d", STARS_PREMIUM)])
-    elif data == "stars_group":
-        await context.bot.send_invoice(chat_id=user_id, title="👥 Group Mode",
-            description="Activate for your group ($111.11)", payload="group_stars",
-            currency="XTR", prices=[LabeledPrice("Group Mode", STARS_GROUP)])
-    elif data == "coins_buy_standard":
-        if u["coins"] >= COINS_STANDARD:
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE users SET coins=coins-%s WHERE user_id=%s", (COINS_STANDARD, user_id))
-            conn.commit()
-            conn.close()
-            set_plan(user_id, "standard", 30)
-            await query.message.edit_text(get_text(lang, "coins_success_standard"))
-        else:
-            await query.answer(get_text(lang, "not_enough_coins", need=COINS_STANDARD-u["coins"]), show_alert=True)
-    elif data == "coins_buy_premium":
-        if u["coins"] >= COINS_PREMIUM:
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE users SET coins=coins-%s WHERE user_id=%s", (COINS_PREMIUM, user_id))
-            conn.commit()
-            conn.close()
-            set_plan(user_id, "premium", 30)
-            await query.message.edit_text(get_text(lang, "coins_success_premium"))
-        else:
-            await query.answer(get_text(lang, "not_enough_coins", need=COINS_PREMIUM-u["coins"]), show_alert=True)
-    elif data.startswith("setlang_"):
-        new_lang = data.split("_")[1]
-        last_changed = u["language_changed_at"]
-        if last_changed and datetime.now() - last_changed < timedelta(hours=24):
-            await query.answer(get_text(lang, "language_cooldown"), show_alert=True)
-            return
-        set_language(user_id, new_lang)
-        await query.message.edit_text(f"✅ Language: {LANGUAGES.get(new_lang, ('','Unknown'))[1]}")
-    elif data == "claim_standard":
-        if u["referral_count"] >= 10 and not u["claimed_standard"]:
-            set_plan(user_id, "standard", 15)
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE users SET claimed_standard=TRUE WHERE user_id=%s", (user_id,))
-            conn.commit()
-            conn.close()
-            await query.message.edit_text(get_text(lang, "claim_standard_success"))
-        else:
-            await query.answer(get_text(lang, "claim_error"), show_alert=True)
-    elif data == "claim_premium":
-        if u["referral_count"] >= 30 and not u["claimed_premium"]:
-            set_plan(user_id, "premium", 15)
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE users SET claimed_premium=TRUE WHERE user_id=%s", (user_id,))
-            conn.commit()
-            conn.close()
-            await query.message.edit_text(get_text(lang, "claim_premium_success"))
-        else:
-            await query.answer(get_text(lang, "claim_error"), show_alert=True)
-    elif data == "buy_standard":
-        keyboard = [[InlineKeyboardButton(get_text(lang, "contact_admin"), url=f"https://t.me/{ADMIN_USERNAME}")]]
-        await query.message.reply_text(
-            f"⭐ STANDARD — 10 USDT\n" + get_text(lang, "payment_info", card=CARD_NUMBER, amount=10),
-            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    elif data == "buy_premium":
-        keyboard = [[InlineKeyboardButton(get_text(lang, "contact_admin"), url=f"https://t.me/{ADMIN_USERNAME}")]]
-        await query.message.reply_text(
-            f"💎 PREMIUM — 15 USDT\n" + get_text(lang, "payment_info", card=CARD_NUMBER, amount=15),
-            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    elif data.startswith("ap_setplan_"):
-        parts = data.split("_")
-        target_id = int(parts[2])
-        plan = parts[3]
-        days = 30 if plan != "free" else None
-        set_plan(target_id, plan, days)
-        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
-        await query.message.edit_text(f"✅ {target_id} → {plan_emoji[plan]} {plan.upper()}")
-        try:
-            await context.bot.send_message(chat_id=target_id, text=f"{plan_emoji[plan]} Plan updated!")
-        except: pass
-    elif data.startswith("ap_block_"):
-        target_id = int(data.split("_")[2])
-        set_blocked(target_id, True)
-        await query.message.edit_text(f"🚫 {target_id} blocked!")
-    elif data.startswith("ap_unblock_"):
-        target_id = int(data.split("_")[2])
-        set_blocked(target_id, False)
-        await query.message.edit_text(f"✅ {target_id} unblocked!")
-
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Access denied!")
-        return
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM users")
-        total = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE plan='standard'")
-        standard = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE plan='premium'")
-        premium = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE is_blocked=TRUE")
-        blocked = c.fetchone()[0]
-        c.execute("SELECT SUM(coins) FROM users")
-        total_coins = c.fetchone()[0] or 0
-        c.execute("SELECT COUNT(*) FROM group_modes")
-        groups = c.fetchone()[0]
-        conn.close()
-        revenue = standard * 10 + premium * 15
-    except:
-        total = standard = premium = blocked = revenue = total_coins = groups = 0
-    await update.message.reply_text(
-        f"🔧 Admin Panel\n{'═'*28}\n\n"
-        f"👥 Users: {total} | 🚫 Blocked: {blocked}\n"
-        f"🆓 Free: {total-standard-premium}\n"
-        f"⭐ Standard: {standard} | 💎 Premium: {premium}\n"
-        f"👥 Active groups: {groups}\n"
-        f"💰 Revenue: ~${revenue}\n"
-        f"🪙 Total coins: {total_coins:,}\n\n"
-        f"/users /find [id/@user]\n"
-        f"/broadcast [msg]\n"
-        f"/createpromo [type] [days] [uses]"
-    )
-
-async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Access denied!")
-        return
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT user_id, username, plan, is_blocked FROM users ORDER BY CASE plan WHEN 'premium' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END, joined_at DESC")
-        rows = c.fetchall()
-        conn.close()
-        if not rows:
-            await update.message.reply_text("No users.")
-            return
-        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
-        text = f"👥 Users: {len(rows)}\n{'═'*30}\n\n"
-        for row in rows:
-            uid, username, plan, is_blocked = row
-            uname = f"@{username}" if username else "no_username"
-            blocked = " 🚫" if is_blocked else ""
-            text += f"{plan_emoji.get(plan,'🆓')} {uname} {uid}{blocked}\n"
-        if len(text) > 4000:
-            for part in [text[i:i+4000] for i in range(0, len(text), 4000)]:
-                await update.message.reply_text(part)
-        else:
-            await update.message.reply_text(text)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def find_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Access denied!")
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /find [id or @username]")
-        return
-    try:
-        arg = context.args[0]
-        conn = get_conn()
-        c = conn.cursor()
-        if arg.startswith("@"):
-            c.execute("SELECT plan, expires_at, is_blocked, full_name, username, user_id FROM users WHERE username=%s", (arg[1:],))
-        else:
-            c.execute("SELECT plan, expires_at, is_blocked, full_name, username, user_id FROM users WHERE user_id=%s", (int(arg),))
-        row = c.fetchone()
-        conn.close()
-        if not row:
-            await update.message.reply_text(f"❌ Not found: {arg}")
-            return
-        plan, expires_at, is_blocked, full_name, username, target_id = row
-        expires = expires_at.strftime("%d.%m.%Y") if expires_at else "—"
-        plan_emoji = {"free": "🆓", "standard": "⭐", "premium": "💎"}
-        keyboard = [
-            [InlineKeyboardButton("🆓", callback_data=f"ap_setplan_{target_id}_free"),
-             InlineKeyboardButton("⭐", callback_data=f"ap_setplan_{target_id}_standard"),
-             InlineKeyboardButton("💎", callback_data=f"ap_setplan_{target_id}_premium")],
-            [InlineKeyboardButton("✅ Unblock" if is_blocked else "🚫 Block",
-             callback_data=f"ap_unblock_{target_id}" if is_blocked else f"ap_block_{target_id}")]
-        ]
-        await update.message.reply_text(
-            f"👤 {full_name or '—'} | @{username or '—'}\n🆔 {target_id}\n"
-            f"{plan_emoji.get(plan,'🆓')} {plan.upper()} | 📅 {expires}\n"
-            f"{'🚫 Blocked' if is_blocked else '✅ Active'}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Access denied!")
-        return
-    message = " ".join(context.args)
-    if not message:
-        await update.message.reply_text("Usage: /broadcast [message]")
-        return
-    try:
-        conn = get_conn()
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM users WHERE is_blocked=FALSE")
-        rows = c.fetchall()
-        conn.close()
-        sent = 0
-        for row in rows:
-            try:
-                await context.bot.send_message(chat_id=row[0], text=f"📢 {message}")
-                sent += 1
-            except: pass
-        await update.message.reply_text(f"✅ Sent to {sent} users!")
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
-    u = get_user(user.id)
-    await update.message.reply_text(get_text(u["language"], "help"))
-
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
-    u = get_user(user.id)
-    user_histories[user.id] = []
-    await update.message.reply_text(get_text(u["language"], "history_cleared"))
-
-async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def pptx_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1514,29 +1553,29 @@ async def pptx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["pptx"] == 0:
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_premium"), callback_data="buy_premium")]]
-        await update.message.reply_text(get_text(lang, "pptx_locked"), reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-    topic = " ".join(context.args)
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_prm"), callback_data="card_prm")]]
+        await update.message.reply_text(tx(lang,"locked_prm"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"); return
+    topic = " ".join(ctx.args)
     if not topic:
-        await update.message.reply_text(get_text(lang, "pptx_example"))
-        return
-    await update.message.reply_text(get_text(lang, "creating_pptx", topic=topic))
+        await update.message.reply_text(tx(lang,"ex_pptx"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"creating_pptx",t=topic), parse_mode="Markdown")
     try:
-        content_str = await generate_content(topic, "pptx")
-        content_str = content_str.strip()
-        if "```" in content_str:
-            content_str = content_str.split("```")[1]
-            if content_str.startswith("json"): content_str = content_str[4:]
-        content = json.loads(content_str)
-        path = create_pptx(content["title"], content["slides"])
+        raw = await ai_once(f"""Create presentation for: '{topic}'. Reply ONLY valid JSON:
+{{"title":"...", "slides":[{{"title":"...", "points":["...","...","..."]}}]}}
+Minimum 6 slides. Use same language as the topic. No extra text.""")
+        raw = raw.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"): raw = raw[4:]
+        data = json.loads(raw)
+        path = make_pptx(data["title"], data["slides"])
         with open(path, "rb") as f:
-            await update.message.reply_document(document=f, filename=f"{topic}.pptx", caption=get_text(lang, "ready"))
+            await update.message.reply_document(f, filename=f"{topic}.pptx", caption=tx(lang,"ready"))
         os.remove(path)
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def word_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1544,29 +1583,29 @@ async def word_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["word"] == 0:
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_premium"), callback_data="buy_premium")]]
-        await update.message.reply_text(get_text(lang, "word_locked"), reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-    topic = " ".join(context.args)
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_prm"), callback_data="card_prm")]]
+        await update.message.reply_text(tx(lang,"locked_prm"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"); return
+    topic = " ".join(ctx.args)
     if not topic:
-        await update.message.reply_text(get_text(lang, "word_example"))
-        return
-    await update.message.reply_text(get_text(lang, "creating_word", topic=topic))
+        await update.message.reply_text(tx(lang,"ex_word"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"creating_word",t=topic), parse_mode="Markdown")
     try:
-        content_str = await generate_content(topic, "docx")
-        content_str = content_str.strip()
-        if "```" in content_str:
-            content_str = content_str.split("```")[1]
-            if content_str.startswith("json"): content_str = content_str[4:]
-        content = json.loads(content_str)
-        path = create_docx(content["title"], content["sections"])
+        raw = await ai_once(f"""Create Word document for: '{topic}'. Reply ONLY valid JSON:
+{{"title":"...", "sections":[{{"title":"...", "points":["...","...","..."]}}]}}
+Minimum 5 sections. Same language as topic. No extra text.""")
+        raw = raw.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"): raw = raw[4:]
+        data = json.loads(raw)
+        path = make_docx(data["title"], data["sections"])
         with open(path, "rb") as f:
-            await update.message.reply_document(document=f, filename=f"{topic}.docx", caption=get_text(lang, "ready"))
+            await update.message.reply_document(f, filename=f"{topic}.docx", caption=tx(lang,"ready"))
         os.remove(path)
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cv_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1574,24 +1613,21 @@ async def cv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["cv"] == 0:
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_standard"), callback_data="buy_standard")]]
-        await update.message.reply_text(get_text(lang, "cv_locked"), reply_markup=InlineKeyboardMarkup(keyboard))
-        return
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_std"), callback_data="card_std")]]
+        await update.message.reply_text(tx(lang,"locked_std"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"); return
     if not check_limit(user.id, "cv", limits["cv"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    info = " ".join(context.args)
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    info = " ".join(ctx.args)
     if not info:
-        await update.message.reply_text(get_text(lang, "cv_example"))
-        return
-    await update.message.reply_text(get_text(lang, "writing_cv"))
+        await update.message.reply_text(tx(lang,"ex_cv"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"writing_cv"), parse_mode="Markdown")
     try:
-        reply = await ai_generate(f"Write professional CV for: {info}\nSections: Summary, Experience, Skills, Education.")
-        await update.message.reply_text(f"✅ CV:\n\n{reply}")
+        reply = await ai_once(f"Write a professional, ATS-friendly CV/Resume for: {info}\nSections: Professional Summary, Work Experience, Skills, Education, Achievements. Make it impressive and detailed.")
+        await update.message.reply_text(f"👤 *Your CV:*\n\n{reply}", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def email_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1599,24 +1635,21 @@ async def email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["email"] == 0:
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_standard"), callback_data="buy_standard")]]
-        await update.message.reply_text(get_text(lang, "email_locked"), reply_markup=InlineKeyboardMarkup(keyboard))
-        return
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_std"), callback_data="card_std")]]
+        await update.message.reply_text(tx(lang,"locked_std"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"); return
     if not check_limit(user.id, "email", limits["email"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    topic = " ".join(context.args)
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    topic = " ".join(ctx.args)
     if not topic:
-        await update.message.reply_text(get_text(lang, "email_example"))
-        return
-    await update.message.reply_text(get_text(lang, "writing_email"))
+        await update.message.reply_text(tx(lang,"ex_email"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"writing_email"), parse_mode="Markdown")
     try:
-        reply = await ai_generate(f"Write professional email about: {topic}\nInclude: Subject, greeting, body, closing.")
-        await update.message.reply_text(f"✅ Email:\n\n{reply}")
+        reply = await ai_once(f"Write a professional email about: {topic}\nInclude: Subject line, proper greeting, clear body, professional closing. Same language as request.")
+        await update.message.reply_text(f"📧 *Your Email:*\n\n{reply}", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1624,20 +1657,18 @@ async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if not check_limit(user.id, "post", limits["post"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    topic = " ".join(context.args)
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    topic = " ".join(ctx.args)
     if not topic:
-        await update.message.reply_text(get_text(lang, "post_example"))
-        return
-    await update.message.reply_text(get_text(lang, "writing_post"))
+        await update.message.reply_text(tx(lang,"ex_post"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"writing_post"), parse_mode="Markdown")
     try:
-        reply = await ai_generate(f"Write engaging social media post about: {topic}\nHook, content, CTA, hashtags.")
-        await update.message.reply_text(f"✅ Post:\n\n{reply}")
+        reply = await ai_once(f"Write an engaging, viral social media post about: {topic}\nInclude: Attention-grabbing hook, valuable content, strong CTA, relevant hashtags. Make it professional and shareable.")
+        await update.message.reply_text(f"📱 *Your Post:*\n\n{reply}", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def biznes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def biznes_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1645,115 +1676,358 @@ async def biznes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if not check_limit(user.id, "biznes", limits["biznes"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    idea = " ".join(context.args)
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown"); return
+    idea = " ".join(ctx.args)
     if not idea:
-        await update.message.reply_text(get_text(lang, "biznes_example"))
-        return
-    await update.message.reply_text(get_text(lang, "writing_biznes"))
+        await update.message.reply_text(tx(lang,"ex_biznes"), parse_mode="Markdown"); return
+    await update.message.reply_text(tx(lang,"writing_biz"), parse_mode="Markdown")
     try:
-        reply = await ai_generate(f"Write detailed business plan for: {idea}\nExecutive Summary, Market, Products, Marketing, Finance.")
-        await update.message.reply_text(f"✅ Business plan:\n\n{reply}")
+        reply = await ai_once(f"Write a comprehensive business plan for: {idea}\nInclude: Executive Summary, Market Analysis, Target Audience, Products/Services, Marketing Strategy, Financial Projections, Competitive Advantage. Be detailed and professional.")
+        await update.message.reply_text(f"💼 *Business Plan:*\n\n{reply}", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def handle_tts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ═══════════════════════════════════════════════════════════
+#                   ADMIN COMMANDS
+# ═══════════════════════════════════════════════════════════
+async def admin_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!"); return
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM users"); total = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE plan='standard'"); std = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE plan='premium'"); prm = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE is_blocked=TRUE"); blk = c.fetchone()[0]
+        c.execute("SELECT SUM(coins) FROM users"); tc = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM group_modes"); grps = c.fetchone()[0]
+        conn.close()
+        rev = std * USDT_STANDARD + prm * USDT_PREMIUM
+    except: total=std=prm=blk=tc=grps=rev=0
+    await update.message.reply_text(
+        f"🔧 *Admin Panel*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Total users: *{total}*\n"
+        f"🆓 Free: *{total-std-prm}*\n"
+        f"⭐ Standard: *{std}*\n"
+        f"💎 Premium: *{prm}*\n"
+        f"🚫 Blocked: *{blk}*\n"
+        f"👥 Active groups: *{grps}*\n"
+        f"💰 Monthly revenue: ~*${rev}*\n"
+        f"🪙 Total coins: *{tc:,}*\n\n"
+        f"📋 *Commands:*\n"
+        f"/users — All users\n"
+        f"/find [id or @user] — Find & manage\n"
+        f"/broadcast [text] — Message all\n"
+        f"/createpromo [type] [val] [uses] — Create promo\n"
+        f"/addcoins [user\\_id] [amount] — Add coins",
+        parse_mode="Markdown"
+    )
+
+async def users_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!"); return
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT user_id,username,plan,is_blocked FROM users ORDER BY CASE plan WHEN 'premium' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END, joined_at DESC")
+        rows = c.fetchall(); conn.close()
+        if not rows: await update.message.reply_text("No users."); return
+        pe = {"free":"🆓","standard":"⭐","premium":"💎"}
+        text = f"👥 *All Users: {len(rows)}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        for uid, uname, plan, blk in rows:
+            n = f"@{uname}" if uname else "no_username"
+            b = " 🚫" if blk else ""
+            text += f"{pe.get(plan,'🆓')} {n} `{uid}`{b}\n"
+        if len(text) > 4000:
+            for p in [text[i:i+4000] for i in range(0, len(text), 4000)]:
+                await update.message.reply_text(p, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def find_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!"); return
+    if not ctx.args:
+        await update.message.reply_text("Usage: /find [id or @username]"); return
+    try:
+        arg = ctx.args[0]
+        conn = db(); c = conn.cursor()
+        if arg.startswith("@"):
+            c.execute("SELECT plan,expires_at,is_blocked,full_name,username,user_id,coins,total_messages FROM users WHERE username=%s", (arg[1:],))
+        else:
+            c.execute("SELECT plan,expires_at,is_blocked,full_name,username,user_id,coins,total_messages FROM users WHERE user_id=%s", (int(arg),))
+        row = c.fetchone(); conn.close()
+        if not row: await update.message.reply_text(f"❌ Not found: {arg}"); return
+        plan, exp, blk, fname, uname, tid, coins, msgs = row
+        pe = {"free":"🆓","standard":"⭐","premium":"💎"}
+        exp_s = exp.strftime("%d.%m.%Y") if exp else "—"
+        kb = [
+            [InlineKeyboardButton("🆓 Free", callback_data=f"adm_plan_{tid}_free"),
+             InlineKeyboardButton("⭐ Std", callback_data=f"adm_plan_{tid}_standard"),
+             InlineKeyboardButton("💎 Prm", callback_data=f"adm_plan_{tid}_premium")],
+            [InlineKeyboardButton("✅ Unblock" if blk else "🚫 Block",
+             callback_data=f"adm_unblock_{tid}" if blk else f"adm_block_{tid}")]
+        ]
+        await update.message.reply_text(
+            f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 ID: `{tid}`\n"
+            f"👤 Name: {fname or '—'}\n"
+            f"📱 Username: @{uname or '—'}\n"
+            f"{pe.get(plan,'🆓')} Plan: *{plan.upper()}*\n"
+            f"📅 Expires: {exp_s}\n"
+            f"🪙 Coins: {coins:,}\n"
+            f"💬 Messages: {msgs:,}\n"
+            f"{'🚫 BLOCKED' if blk else '✅ Active'}",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!"); return
+    msg = " ".join(ctx.args)
+    if not msg: await update.message.reply_text("Usage: /broadcast [message]"); return
+    try:
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE is_blocked=FALSE")
+        rows = c.fetchall(); conn.close()
+        sent = 0
+        for row in rows:
+            try: await ctx.bot.send_message(chat_id=row[0], text=f"📢 {msg}"); sent += 1
+            except: pass
+        await update.message.reply_text(f"✅ Sent to *{sent}* users!", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def addcoins_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Access denied!"); return
+    if len(ctx.args) < 2:
+        await update.message.reply_text("Usage: /addcoins [user_id] [amount]"); return
+    try:
+        uid, amount = int(ctx.args[0]), int(ctx.args[1])
+        add_coins(uid, amount)
+        await update.message.reply_text(f"✅ Added *{amount:,}* coins to `{uid}`", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+# ═══════════════════════════════════════════════════════════
+#                   PAYMENT HANDLERS
+# ═══════════════════════════════════════════════════════════
+async def precheckout(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=True)
+
+async def payment_success(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    ensure_user(user.id, user.username, user.full_name)
+    payload = update.message.successful_payment.invoice_payload
     u = get_user(user.id)
     lang = u["language"]
-    if u["is_blocked"]: return
-    limits = get_limits(u["plan"], u["is_admin"])
-    if limits.get("tts") == 0:
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_standard"), callback_data="buy_standard")]]
-        await update.message.reply_text(get_text(lang, "ai_sound_locked"), reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-    if not check_limit(user.id, "tts", limits["tts"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
-        return
-    text = " ".join(context.args)
-    if not text:
-        await update.message.reply_text(get_text(lang, "voice_example"))
-        return
-    await update.message.reply_text(get_text(lang, "generating_voice"))
-    try:
-        tts_lang = detect_lang_gtts(text)
-        tts = gTTS(text=text, lang=tts_lang)
-        buf = io.BytesIO()
-        tts.write_to_fp(buf)
-        buf.seek(0)
-        await update.message.reply_voice(voice=buf)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+    if payload == "std_stars":
+        set_plan(user.id, "standard", 30)
+        await update.message.reply_text("✅ ⭐ *Standard* activated for 30 days! 🎉", parse_mode="Markdown")
+    elif payload == "prm_stars":
+        set_plan(user.id, "premium", 30)
+        await update.message.reply_text("✅ 💎 *Premium* activated for 30 days! 🎉", parse_mode="Markdown")
+    elif payload == "grp_stars":
+        await update.message.reply_text(
+            "✅ *Group mode purchased!*\n\nNow add me to your group and send /activate\\_group",
+            parse_mode="Markdown"
+        )
+    elif payload.startswith("img_"):
+        prompt = payload[4:]
+        await update.message.reply_text(tx(lang,"gen_image"), parse_mode="Markdown")
+        img = generate_image(prompt)
+        if img:
+            buf = io.BytesIO(img); buf.name = "image.png"
+            await update.message.reply_photo(photo=buf, caption=f"🎨 {prompt}")
+        else:
+            await update.message.reply_text("❌ Could not generate. Try again.")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ═══════════════════════════════════════════════════════════
+#                   CALLBACK HANDLER
+# ═══════════════════════════════════════════════════════════
+async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    uid = q.from_user.id
+    u = get_user(uid)
+    lang = u["language"]
+
+    # Language selection
+    if data.startswith("lang_"):
+        new_lang = data[5:]
+        lca = u["language_changed_at"]
+        if lca and datetime.now() - lca < timedelta(hours=24):
+            await q.answer(tx(lang,"lang_cooldown"), show_alert=True); return
+        set_language(uid, new_lang)
+        flag, name = LANGUAGES.get(new_lang, ("🌐","Unknown"))
+        await q.message.edit_text(f"✅ Language changed to *{flag} {name}!*", parse_mode="Markdown")
+
+    # Stars payments
+    elif data == "stars_std":
+        await ctx.bot.send_invoice(chat_id=uid, title="⭐ Standard Plan",
+            description="Standard plan for 30 days — unlimited AI chat!", payload="std_stars",
+            currency="XTR", prices=[LabeledPrice("Standard 30 days", STARS_STANDARD)])
+    elif data == "stars_prm":
+        await ctx.bot.send_invoice(chat_id=uid, title="💎 Premium Plan",
+            description="Premium plan for 30 days — everything unlimited!", payload="prm_stars",
+            currency="XTR", prices=[LabeledPrice("Premium 30 days", STARS_PREMIUM)])
+    elif data == "stars_grp":
+        await ctx.bot.send_invoice(chat_id=uid, title="👥 Group Mode",
+            description="Activate bot for your entire group!", payload="grp_stars",
+            currency="XTR", prices=[LabeledPrice("Group Mode", STARS_GROUP)])
+
+    # Image payment
+    elif data.startswith("img_pay_"):
+        prompt = data[8:]
+        await ctx.bot.send_invoice(chat_id=uid, title="🎨 AI Image",
+            description=f"Generate: {prompt}", payload=f"img_{prompt}",
+            currency="XTR", prices=[LabeledPrice("AI Image", STARS_IMAGINE)])
+
+    # Coins purchase
+    elif data == "coins_std":
+        if u["coins"] >= COINS_STANDARD:
+            conn = db(); c = conn.cursor()
+            c.execute("UPDATE users SET coins=coins-%s WHERE user_id=%s", (COINS_STANDARD, uid))
+            conn.commit(); conn.close()
+            set_plan(uid, "standard", 30)
+            await q.message.edit_text(tx(lang,"coins_ok_std"), parse_mode="Markdown")
+        else:
+            await q.answer(tx(lang,"not_enough",need=COINS_STANDARD-u["coins"]), show_alert=True)
+    elif data == "coins_prm":
+        if u["coins"] >= COINS_PREMIUM:
+            conn = db(); c = conn.cursor()
+            c.execute("UPDATE users SET coins=coins-%s WHERE user_id=%s", (COINS_PREMIUM, uid))
+            conn.commit(); conn.close()
+            set_plan(uid, "premium", 30)
+            await q.message.edit_text(tx(lang,"coins_ok_prm"), parse_mode="Markdown")
+        else:
+            await q.answer(tx(lang,"not_enough",need=COINS_PREMIUM-u["coins"]), show_alert=True)
+
+    # Card payment
+    elif data == "card_std":
+        kb = [[InlineKeyboardButton(tx(lang,"btn_contact"), url=f"https://t.me/{ADMIN_USERNAME}")]]
+        await q.message.reply_text(
+            tx(lang,"pay_card",card=CARD_NUMBER,amt=USDT_STANDARD,admin=ADMIN_USERNAME),
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    elif data == "card_prm":
+        kb = [[InlineKeyboardButton(tx(lang,"btn_contact"), url=f"https://t.me/{ADMIN_USERNAME}")]]
+        await q.message.reply_text(
+            tx(lang,"pay_card",card=CARD_NUMBER,amt=USDT_PREMIUM,admin=ADMIN_USERNAME),
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+    # Referral claims
+    elif data == "claim_std":
+        if u["referral_count"] >= 10 and not u["claimed_standard"]:
+            set_plan(uid, "standard", 15)
+            conn = db(); c = conn.cursor()
+            c.execute("UPDATE users SET claimed_standard=TRUE WHERE user_id=%s", (uid,))
+            conn.commit(); conn.close()
+            await q.message.edit_text(tx(lang,"claimed_std"), parse_mode="Markdown")
+        else:
+            await q.answer(tx(lang,"claim_err"), show_alert=True)
+    elif data == "claim_prm":
+        if u["referral_count"] >= 30 and not u["claimed_premium"]:
+            set_plan(uid, "premium", 15)
+            conn = db(); c = conn.cursor()
+            c.execute("UPDATE users SET claimed_premium=TRUE WHERE user_id=%s", (uid,))
+            conn.commit(); conn.close()
+            await q.message.edit_text(tx(lang,"claimed_prm"), parse_mode="Markdown")
+        else:
+            await q.answer(tx(lang,"claim_err"), show_alert=True)
+
+    # Admin actions
+    elif data.startswith("adm_plan_"):
+        parts = data.split("_")
+        tid, plan = int(parts[2]), parts[3]
+        days = 30 if plan != "free" else None
+        set_plan(tid, plan, days)
+        pe = {"free":"🆓","standard":"⭐","premium":"💎"}
+        await q.message.edit_text(f"✅ User `{tid}` → {pe[plan]} *{plan.upper()}*", parse_mode="Markdown")
+        try: await ctx.bot.send_message(tid, f"{pe[plan]} Your plan updated to *{plan.upper()}*!", parse_mode="Markdown")
+        except: pass
+    elif data.startswith("adm_block_"):
+        tid = int(data.split("_")[2])
+        set_blocked(tid, True)
+        await q.message.edit_text(f"🚫 User `{tid}` blocked!", parse_mode="Markdown")
+    elif data.startswith("adm_unblock_"):
+        tid = int(data.split("_")[2])
+        set_blocked(tid, False)
+        await q.message.edit_text(f"✅ User `{tid}` unblocked!", parse_mode="Markdown")
+
+# ═══════════════════════════════════════════════════════════
+#                   MESSAGE HANDLERS
+# ═══════════════════════════════════════════════════════════
+async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_id = user.id
     chat = update.effective_chat
-    message_text = update.message.text or ""
+    text = update.message.text or ""
 
+    # Group chat handling
     if chat.type in ["group", "supergroup"]:
-        if not message_text.lower().startswith("bot "):
+        if not text.lower().startswith("bot "):
             return
         if not is_group_active(chat.id):
             return
-        question = message_text[4:].strip()
-        if not question:
-            return
+        question = text[4:].strip()
+        if not question: return
         try:
-            await context.bot.send_chat_action(chat_id=chat.id, action="typing")
-            reply = await ai_reply(user_id, question, "en")
+            await ctx.bot.send_chat_action(chat_id=chat.id, action="typing")
+            reply = await ai_chat(user.id, question)
             await update.message.reply_text(reply)
         except Exception as e:
-            await update.message.reply_text(f"Error: {str(e)}")
+            await update.message.reply_text(f"Error: {e}")
         return
 
-    ensure_user(user_id, user.username, user.full_name)
-    u = get_user(user_id)
+    # Private chat
+    ensure_user(user.id, user.username, user.full_name)
+    u = get_user(user.id)
     lang = u["language"]
 
     if u["is_blocked"]:
-        await update.message.reply_text(get_text(lang, "blocked"))
+        await update.message.reply_text(tx(lang,"blocked",admin=ADMIN_USERNAME), parse_mode="Markdown")
         return
 
-    if is_bad_message(message_text):
-        warning_count = add_warning(user_id)
-        if warning_count >= MAX_WARNINGS:
-            set_blocked(user_id, True)
-            await update.message.reply_text(get_text(lang, "banned_for_abuse"))
+    # Bad word check
+    if is_bad(text):
+        wc = add_warning(user.id)
+        if wc >= MAX_WARNINGS:
+            set_blocked(user.id, True)
+            await update.message.reply_text(tx(lang,"banned"), parse_mode="Markdown")
         else:
-            await update.message.reply_text(get_text(lang, "warning", count=warning_count, max=MAX_WARNINGS))
+            await update.message.reply_text(tx(lang,"warning",c=wc,m=MAX_WARNINGS), parse_mode="Markdown")
         return
 
     limits = get_limits(u["plan"], u["is_admin"])
-    if not u["is_admin"] and not check_limit(user_id, "chat", limits["chat"]):
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_plan"), callback_data="buy_standard")]]
-        await update.message.reply_text(get_text(lang, "limit_reached"), reply_markup=InlineKeyboardMarkup(keyboard))
+    if not u["is_admin"] and not check_limit(user.id, "chat", limits["chat"]):
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_std"), callback_data="card_std")]]
+        await update.message.reply_text(tx(lang,"limit_reached"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
         return
 
-    total = increment_messages(user_id, u["is_admin"])
+    total = inc_messages(user.id, u["is_admin"])
 
+    # Achievement check
     if total == 100000 and not u["achievement_100k"] and not u["is_admin"]:
-        set_plan(user_id, "standard", 5)
+        set_plan(user.id, "standard", 5)
         try:
-            conn = get_conn()
-            c = conn.cursor()
-            c.execute("UPDATE users SET achievement_100k=TRUE WHERE user_id=%s", (user_id,))
-            conn.commit()
-            conn.close()
+            conn = db(); c = conn.cursor()
+            c.execute("UPDATE users SET achievement_100k=TRUE WHERE user_id=%s", (user.id,))
+            conn.commit(); conn.close()
         except: pass
-        await update.message.reply_text(get_text(lang, "achievement_100k"))
+        await update.message.reply_text(tx(lang,"achievement"), parse_mode="Markdown")
 
-    await context.bot.send_chat_action(chat_id=chat.id, action="typing")
+    await ctx.bot.send_chat_action(chat_id=chat.id, action="typing")
     try:
-        reply = await ai_reply(user_id, message_text, lang, search_enabled=True, limits=limits)
+        reply = await ai_chat(user.id, text, search=True, limits=limits)
         await update.message.reply_text(reply)
-        await update_memory(user_id, message_text, reply)
+        await update_memory_async(user.id, text, reply)
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1761,25 +2035,26 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["voice"] == 0:
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_premium"), callback_data="buy_premium")]]
-        await update.message.reply_text(get_text(lang, "voice_locked"), reply_markup=InlineKeyboardMarkup(keyboard))
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_prm"), callback_data="card_prm")]]
+        await update.message.reply_text(tx(lang,"locked_prm"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
         return
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
-        file = await context.bot.get_file(update.message.voice.file_id)
-        audio_data = requests.get(file.file_path).content
-        with open("voice.ogg", "wb") as f:
-            f.write(audio_data)
-        with open("voice.ogg", "rb") as f:
-            transcription = client.audio.transcriptions.create(file=("voice.ogg", f.read()), model="whisper-large-v3")
-        user_text = transcription.text
-        await update.message.reply_text(get_text(lang, "you_said") + user_text)
-        reply = await ai_reply(user.id, user_text, lang)
+        f = await ctx.bot.get_file(update.message.voice.file_id)
+        data = requests.get(f.file_path).content
+        with open("v.ogg","wb") as fp: fp.write(data)
+        with open("v.ogg","rb") as fp:
+            tr = groq.audio.transcriptions.create(file=("v.ogg", fp.read()), model="whisper-large-v3")
+        user_text = tr.text
+        await update.message.reply_text(tx(lang,"you_said") + user_text, parse_mode="Markdown")
+        reply = await ai_chat(user.id, user_text)
         await update.message.reply_text(reply)
+        try: os.remove("v.ogg")
+        except: pass
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1787,26 +2062,26 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if not u["is_admin"] and not check_limit(user.id, "image", limits["image"]):
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_plan"), callback_data="buy_standard")]]
-        await update.message.reply_text(get_text(lang, "limit_reached"), reply_markup=InlineKeyboardMarkup(keyboard))
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_std"), callback_data="card_std")]]
+        await update.message.reply_text(tx(lang,"limit_reached"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
         return
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
         photo = update.message.photo[-1]
-        file = await context.bot.get_file(photo.file_id)
-        caption = update.message.caption or "What is in this image? Describe in detail."
-        response = client.chat.completions.create(
+        f = await ctx.bot.get_file(photo.file_id)
+        caption = update.message.caption or "Describe this image in detail. What do you see?"
+        r = groq.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[{"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": file.file_path}},
-                {"type": "text", "text": caption}
+            messages=[{"role":"user","content":[
+                {"type":"image_url","image_url":{"url":f.file_path}},
+                {"type":"text","text":caption}
             ]}]
         )
-        await update.message.reply_text(response.choices[0].message.content)
+        await update.message.reply_text(r.choices[0].message.content)
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id)
@@ -1814,104 +2089,124 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["pdf"] == 0:
-        keyboard = [[InlineKeyboardButton(get_text(lang, "upgrade_standard"), callback_data="buy_standard")]]
-        await update.message.reply_text(get_text(lang, "pdf_locked"), reply_markup=InlineKeyboardMarkup(keyboard))
+        kb = [[InlineKeyboardButton(tx(lang,"btn_upgrade_std"), callback_data="card_std")]]
+        await update.message.reply_text(tx(lang,"locked_std"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
         return
     if not u["is_admin"] and not check_limit(user.id, "pdf", limits["pdf"]):
-        await update.message.reply_text(get_text(lang, "limit_reached"))
+        await update.message.reply_text(tx(lang,"limit_reached"), parse_mode="Markdown")
         return
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    doc = update.message.document
+    if not doc.file_name.lower().endswith(".pdf"):
+        await update.message.reply_text(tx(lang,"pdf_only"), parse_mode="Markdown")
+        return
+    await update.message.reply_text(tx(lang,"reading_pdf"), parse_mode="Markdown")
+    await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
-        doc = update.message.document
-        if not doc.file_name.endswith(".pdf"):
-            await update.message.reply_text(get_text(lang, "pdf_required"))
-            return
-        await update.message.reply_text(get_text(lang, "reading_pdf"))
-        file = await context.bot.get_file(doc.file_id)
-        pdf_data = requests.get(file.file_path).content
-        with open("temp.pdf", "wb") as f:
-            f.write(pdf_data)
-        pdf = fitz.open("temp.pdf")
-        text = "".join(page.get_text() for page in pdf)
+        f = await ctx.bot.get_file(doc.file_id)
+        data = requests.get(f.file_path).content
+        with open("tmp.pdf","wb") as fp: fp.write(data)
+        pdf = fitz.open("tmp.pdf")
+        text = "".join(p.get_text() for p in pdf)
         pdf.close()
-        os.remove("temp.pdf")
-        if len(text) > 12000:
-            text = text[:12000] + "..."
-        caption = update.message.caption or "Summarize and explain key points."
-        reply = await ai_reply(user.id, f"PDF:\n\n{text}\n\nRequest: {caption}", lang, search_enabled=False)
+        try: os.remove("tmp.pdf")
+        except: pass
+        if len(text) > 12000: text = text[:12000] + "..."
+        caption = update.message.caption or "Summarize this document comprehensively and explain all key points."
+        reply = await ai_chat(user.id, f"PDF Content:\n\n{text}\n\nRequest: {caption}", search=False)
         await update.message.reply_text(reply)
     except Exception as e:
-        await update.message.reply_text(f"Error: {str(e)}")
+        await update.message.reply_text(f"Error: {e}")
 
+# ═══════════════════════════════════════════════════════════
+#                   BOT SETUP
+# ═══════════════════════════════════════════════════════════
 async def post_init(app):
     init_db()
     await app.bot.set_my_commands([
-        BotCommand("start", "Start"),
-        BotCommand("updateplan", "Plans & pricing"),
-        BotCommand("pptx", "PowerPoint (Premium)"),
-        BotCommand("word", "Word (Premium)"),
-        BotCommand("cv", "CV (Standard+)"),
-        BotCommand("email", "Email (Standard+)"),
-        BotCommand("post", "Marketing post"),
-        BotCommand("biznes", "Business plan"),
-        BotCommand("ai_sound", "AI Voice (Standard+)"),
-        BotCommand("imagine", "AI Image (Premium)"),
-        BotCommand("translate", "Translator"),
-        BotCommand("code", "Code writer"),
-        BotCommand("document", "Document (Standard+)"),
-        BotCommand("coins", "My coins"),
-        BotCommand("referral", "Invite friends"),
-        BotCommand("affiliate", "Affiliate program"),
-        BotCommand("gift", "Daily bonus"),
-        BotCommand("top", "Top users"),
-        BotCommand("stats", "Statistics"),
-        BotCommand("promo", "Promo code"),
-        BotCommand("language", "Change language"),
-        BotCommand("reset", "Clear history"),
-        BotCommand("help", "Help"),
+        BotCommand("start",        "🚀 Start the bot"),
+        BotCommand("updateplan",   "💰 Plans & pricing"),
+        BotCommand("weather",      "🌦 Weather forecast"),
+        BotCommand("crypto",       "💰 Crypto prices"),
+        BotCommand("news",         "📰 Latest news"),
+        BotCommand("imagine",      "🎨 AI Image (Premium)"),
+        BotCommand("pptx",         "📊 PowerPoint (Premium)"),
+        BotCommand("word",         "📝 Word document (Premium)"),
+        BotCommand("cv",           "👤 Write CV (Standard+)"),
+        BotCommand("email",        "📧 Write email (Standard+)"),
+        BotCommand("document",     "📋 Create document (Standard+)"),
+        BotCommand("ai_sound",     "🔊 AI Voice (Standard+)"),
+        BotCommand("post",         "📱 Marketing post"),
+        BotCommand("biznes",       "💼 Business plan"),
+        BotCommand("translate",    "🌐 Translator"),
+        BotCommand("code",         "💻 Code writer"),
+        BotCommand("coins",        "🪙 My coins"),
+        BotCommand("referral",     "👥 Invite & earn"),
+        BotCommand("affiliate",    "🤝 Affiliate program"),
+        BotCommand("gift",         "🎁 Daily bonus"),
+        BotCommand("top",          "🏆 Top users"),
+        BotCommand("stats",        "📊 My statistics"),
+        BotCommand("promo",        "🎟️ Promo code"),
+        BotCommand("language",     "🌐 Change language"),
+        BotCommand("reset",        "🗑️ Clear history"),
+        BotCommand("help",         "❓ Help"),
     ])
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("updateplan", updateplan_command))
-    app.add_handler(CommandHandler("pptx", pptx_command))
-    app.add_handler(CommandHandler("word", word_command))
-    app.add_handler(CommandHandler("cv", cv_command))
-    app.add_handler(CommandHandler("email", email_command))
-    app.add_handler(CommandHandler("post", post_command))
-    app.add_handler(CommandHandler("biznes", biznes_command))
-    app.add_handler(CommandHandler("ai_sound", handle_tts))
-    app.add_handler(CommandHandler("imagine", imagine_command))
-    app.add_handler(CommandHandler("translate", translate_command))
-    app.add_handler(CommandHandler("code", code_command))
-    app.add_handler(CommandHandler("document", document_command))
-    app.add_handler(CommandHandler("coins", coins_command))
-    app.add_handler(CommandHandler("referral", referral_command))
-    app.add_handler(CommandHandler("affiliate", affiliate_command))
-    app.add_handler(CommandHandler("gift", gift_command))
-    app.add_handler(CommandHandler("top", top_command))
-    app.add_handler(CommandHandler("stats", stats_command))
-    app.add_handler(CommandHandler("promo", promo_command))
-    app.add_handler(CommandHandler("language", language_command))
-    app.add_handler(CommandHandler("group", group_command))
-    app.add_handler(CommandHandler("activate_group", activate_group_command))
-    app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("find", find_command))
-    app.add_handler(CommandHandler("users", users_command))
-    app.add_handler(CommandHandler("broadcast", broadcast_command))
-    app.add_handler(CommandHandler("createpromo", createpromo_command))
-    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Commands
+    app.add_handler(CommandHandler("start",          start))
+    app.add_handler(CommandHandler("help",           help_cmd))
+    app.add_handler(CommandHandler("reset",          reset_cmd))
+    app.add_handler(CommandHandler("updateplan",     updateplan_cmd))
+    app.add_handler(CommandHandler("language",       language_cmd))
+    app.add_handler(CommandHandler("weather",        weather_cmd))
+    app.add_handler(CommandHandler("crypto",         crypto_cmd))
+    app.add_handler(CommandHandler("news",           news_cmd))
+    app.add_handler(CommandHandler("imagine",        imagine_cmd))
+    app.add_handler(CommandHandler("translate",      translate_cmd))
+    app.add_handler(CommandHandler("code",           code_cmd))
+    app.add_handler(CommandHandler("document",       document_cmd))
+    app.add_handler(CommandHandler("ai_sound",       ai_sound_cmd))
+    app.add_handler(CommandHandler("pptx",           pptx_cmd))
+    app.add_handler(CommandHandler("word",           word_cmd))
+    app.add_handler(CommandHandler("cv",             cv_cmd))
+    app.add_handler(CommandHandler("email",          email_cmd))
+    app.add_handler(CommandHandler("post",           post_cmd))
+    app.add_handler(CommandHandler("biznes",         biznes_cmd))
+    app.add_handler(CommandHandler("coins",          coins_cmd))
+    app.add_handler(CommandHandler("referral",       referral_cmd))
+    app.add_handler(CommandHandler("affiliate",      affiliate_cmd))
+    app.add_handler(CommandHandler("gift",           gift_cmd))
+    app.add_handler(CommandHandler("top",            top_cmd))
+    app.add_handler(CommandHandler("stats",          stats_cmd))
+    app.add_handler(CommandHandler("promo",          promo_cmd))
+    app.add_handler(CommandHandler("group",          group_cmd))
+    app.add_handler(CommandHandler("activate_group", activate_group_cmd))
+
+    # Admin commands
+    app.add_handler(CommandHandler("admin",        admin_cmd))
+    app.add_handler(CommandHandler("users",        users_cmd))
+    app.add_handler(CommandHandler("find",         find_cmd))
+    app.add_handler(CommandHandler("broadcast",    broadcast_cmd))
+    app.add_handler(CommandHandler("createpromo",  createpromo_cmd))
+    app.add_handler(CommandHandler("addcoins",     addcoins_cmd))
+
+    # Payments
+    app.add_handler(PreCheckoutQueryHandler(precheckout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, payment_success))
+
+    # Callbacks & messages
+    app.add_handler(CallbackQueryHandler(callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_image))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
-    print("Bot is running... ✅")
+
+    print(f"🚀 {BOT_NAME} is running...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+ENDOFFILE
+echo "Done! Lines: $(wc -l < /home/claude/bot.py)"
