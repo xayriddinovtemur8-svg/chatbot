@@ -26,7 +26,7 @@ from docx.shared import Pt as DocPt, RGBColor as DocRGB
 load_dotenv()
 
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY      = os.getenv("GROQ_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL      = os.getenv("DATABASE_URL")
 CARD_NUMBER       = os.getenv("CARD_NUMBER")
 WEATHER_API_KEY   = os.getenv("WEATHER_API_KEY")
