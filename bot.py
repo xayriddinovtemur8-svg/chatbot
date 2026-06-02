@@ -8,6 +8,7 @@ import requests
 import psycopg2
 import fitz
 from datetime import datetime, timedelta, date
+from openai import OpenAI
 from dotenv import load_dotenv
 from gtts import gTTS
 from langdetect import detect
@@ -518,7 +519,7 @@ def t(lang, key, **kw):
         except: pass
     return s
 
-groq_client = Groq(api_key=GROQ_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
 user_histories = {}
 
 def db():
