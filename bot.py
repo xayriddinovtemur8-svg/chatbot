@@ -8,7 +8,6 @@ import requests
 import psycopg2
 import fitz
 from datetime import datetime, timedelta, date
-from openai import OpenAI
 from dotenv import load_dotenv
 from gtts import gTTS
 from langdetect import detect
