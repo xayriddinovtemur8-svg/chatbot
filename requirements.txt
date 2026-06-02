@@ -1,5 +1,5 @@
 python-telegram-bot
-groq
+openai
 python-dotenv
 python-pptx
 python-docx
