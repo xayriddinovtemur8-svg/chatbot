@@ -6,8 +6,9 @@ import string
 import requests
 import psycopg2
 import fitz
+import base64
 from datetime import datetime, timedelta, date
-from openai import OpenAI
+from groq import Groq
 from dotenv import load_dotenv
 from gtts import gTTS
 from langdetect import detect
@@ -25,7 +26,7 @@ from docx.shared import Pt as DocPt, RGBColor as DocRGB
 load_dotenv()
 
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")
+GROQ_API_KEY      = os.getenv("GROQ_API_KEY")
 DATABASE_URL      = os.getenv("DATABASE_URL")
 CARD_NUMBER       = os.getenv("CARD_NUMBER")
 WEATHER_API_KEY   = os.getenv("WEATHER_API_KEY")
@@ -74,33 +75,35 @@ LANGUAGES = {
 }
 
 TEXTS = {
-"en": {
+"en":{
 "welcome":(
     "👋 *Welcome to {bot}!*\n━━━━━━━━━━━━━━━━━━━━\n"
     "📋 *Plan:* {pe} {plan}\n🪙 *Coins:* {coins:,}\n\n"
-    "🤖 *AI:* Chat • PDF • Image • Voice • Translate • Code\n"
-    "🎨 AI Image • 📋 Document\n\n"
-    "📦 *Create:* /pptx • /word • /cv • /email • /post\n\n"
+    "🤖 *AI Features:*\n"
+    "💬 Chat • 🌐 Search • 📄 PDF • 🖼️ Images • 🎤 Voice\n"
+    "🎨 AI Image • 🌐 Translate • 💻 Code • 📋 Document\n\n"
+    "📦 *Create Files:*\n"
+    "📊 /pptx • 📝 /word • 👤 /cv • 📧 /email • 📱 /post\n\n"
     "🌤 *Real-time:* /weather • /crypto • /news\n\n"
     "🎁 /coins • /referral • /affiliate • /gift • /top • /stats\n"
     "⚙️ /updateplan • /language • /help"
 ),
 "help":(
-    "📌 *All Commands*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🤖 Chat • PDF • Image • Voice\n"
+    "📌 *Commands*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "💬 Chat freely • 📄 Send PDF • 🖼️ Send photo • 🎤 Voice\n"
     "/translate /code /document ⭐\n"
     "/pptx 💎 /word 💎 /cv ⭐ /email ⭐ /post /biznes\n"
     "/imagine 💎 /ai_sound ⭐\n\n"
     "🌤 /weather /crypto /news\n\n"
     "💰 /updateplan /coins /referral /affiliate\n"
     "/gift /top /stats /promo /language /reset\n\n"
-    "⭐=Standard+ 💎=Premium"
+    "⭐ = Standard+  💎 = Premium only"
 ),
 "plan_free":"🆓 FREE","plan_standard":"⭐ STANDARD",
 "plan_premium":"💎 PREMIUM","plan_admin":"👑 ADMIN",
-"limit_reached":"❌ *Daily limit reached!*\nUse /updateplan.",
-"blocked":"🚫 Blocked. Contact @{admin}",
-"cleared":"✅ History cleared!",
+"limit_reached":"❌ *Daily limit reached!*\nUpgrade with /updateplan",
+"blocked":"🚫 You are blocked. Contact @{admin}",
+"cleared":"✅ Chat history cleared!",
 "gen_voice":"⏳ Generating voice...","gen_image":"⏳ Generating image...",
 "translating":"⏳ Translating...","writing_code":"⏳ Writing code...",
 "writing_doc":"⏳ Creating document...","writing_cv":"⏳ Writing CV...",
@@ -118,82 +121,94 @@ TEXTS = {
 "ex_document":"Example: `/document job application`",
 "ex_cv":"Example: `/cv Python dev, 3 years`",
 "ex_email":"Example: `/email follow up after interview`",
-"ex_post":"Example: `/post grand opening`",
-"ex_biznes":"Example: `/biznes online store`",
+"ex_post":"Example: `/post grand opening coffee shop`",
+"ex_biznes":"Example: `/biznes online clothing store`",
 "ex_pptx":"Example: `/pptx artificial intelligence`",
 "ex_word":"Example: `/word business proposal`",
 "ex_weather":"Example: `/weather London`",
 "ex_crypto":"Example: `/crypto bitcoin`",
-"weather_err":"❌ City not found. Try: `/weather London`",
-"crypto_err":"❌ Coin not found. Try: `/crypto bitcoin`",
-"choose_lang":"🌐 *Choose language:*",
-"lang_cooldown":"⏳ Change language once per 24 hours.",
-"pdf_only":"📄 Send a PDF file!",
+"weather_err":"❌ City not found. Example: `/weather London`",
+"crypto_err":"❌ Coin not found. Example: `/crypto bitcoin`",
+"choose_lang":"🌐 *Choose your language:*",
+"lang_cooldown":"⏳ You can change language once per 24 hours.",
+"pdf_only":"📄 Please send a PDF file!",
 "reading_pdf":"⏳ Reading PDF...",
 "you_said":"🎤 *You said:* ",
 "coins_info":(
-    "🪙 *Coins: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "📈 *Earn:* +{cpm}/msg • +{aff}% referrals • +25 daily\n\n"
-    "🛒 *Spend:*\n• {std:,} = ⭐ Standard 30d\n• {prm:,} = 💎 Premium 30d"
+    "🪙 *Your Coins: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📈 *Earn:* +{cpm} per message • +{aff}% referrals • +25 daily\n\n"
+    "🛒 *Spend:*\n• {std:,} coins = ⭐ Standard 30 days\n"
+    "• {prm:,} coins = 💎 Premium 30 days"
 ),
 "not_enough":"❌ Need *{need:,}* more coins.",
-"coins_ok_std":"✅ *Standard* 30 days! 🎉",
-"coins_ok_prm":"✅ *Premium* 30 days! 🎉",
+"coins_ok_std":"✅ *Standard* activated for 30 days! 🎉",
+"coins_ok_prm":"✅ *Premium* activated for 30 days! 🎉",
 "referral_info":(
     "👥 *Referral Program*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🔗 *Link:*\n`{link}`\n\n"
-    "📊 Invited: {count}\n\n"
-    "🎁 10 friends → ⭐ Standard 15d — {ss}\n"
-    "🎁 30 friends → 💎 Premium 15d — {ps}\n\n"
-    "🪙 Earn *{aff}%* of referrals' coins!"
+    "🔗 *Your link:*\n`{link}`\n\n"
+    "📊 Invited: *{count}* friends\n\n"
+    "🎁 10 friends → ⭐ Standard 15 days — {ss}\n"
+    "🎁 30 friends → 💎 Premium 15 days — {ps}\n\n"
+    "🪙 Earn *{aff}%* of every referral's coins!"
 ),
-"claim_std":"🎁 Claim Standard 15d",
-"claim_prm":"🎁 Claim Premium 15d",
-"claimed_std":"🎉 ⭐ Standard 15 days!",
-"claimed_prm":"🎉 💎 Premium 15 days!",
-"claim_err":"❌ Already claimed or not enough!",
+"claim_std":"🎁 Claim Standard 15 days",
+"claim_prm":"🎁 Claim Premium 15 days",
+"claimed_std":"🎉 ⭐ *Standard* activated for 15 days!",
+"claimed_prm":"🎉 💎 *Premium* activated for 15 days!",
+"claim_err":"❌ Already claimed or not enough referrals!",
 "aff_info":(
-    "🤝 *Affiliate*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🔗 `{link}`\n📊 {count} referrals | 🪙 {earned:,} earned\n\n"
-    "Share → earn *{aff}%* of their coins!"
+    "🤝 *Affiliate Program*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Your link:*\n`{link}`\n\n"
+    "📊 Referrals: *{count}* | 🪙 Earned: *{earned:,}* coins\n\n"
+    "Share your link and earn *{aff}%* of their coins!"
 ),
 "stats_info":(
-    "📊 *Statistics*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📊 *Your Statistics*\n━━━━━━━━━━━━━━━━━━━━\n\n"
     "{pe} *{plan}* | 📅 {exp}\n"
     "🪙 {coins:,} | 👥 {refs} | 🔥 {streak}d | 💬 {total:,}\n\n"
-    "Today: 💬{chat} 🌐{search} 🖼️{image} 📄{pdf}\n"
+    "📈 *Today:*\n"
+    "💬{chat} 🌐{search} 🖼️{image} 📄{pdf}\n"
     "👤{cv} 📧{email} 🔊{tts} 📱{post}"
 ),
 "gift_done":"🎁 *Already claimed today!*\nCome back tomorrow 😊",
-"gift_ok":"🎁 *Daily Bonus!*\nStreak: *{streak}d* 🔥\n+5 msgs & +25 coins!",
-"gift_streak":"🎉 *10 day streak!*\n⭐ Standard 10 days!",
-"top_title":"🏆 *Top 10 Active Users*\n━━━━━━━━━━━━━━━━━━━━\n\n",
-"promo_enter":"Enter code: `/promo CODE`",
-"promo_bad":"❌ Invalid or expired code!",
-"promo_used":"❌ Already used!",
-"promo_ok":"✅ Applied! *{reward}*",
+"gift_ok":"🎁 *Daily Bonus!*\nStreak: *{streak} days* 🔥\n+5 messages & +25 coins!",
+"gift_streak":"🎉 *10 day streak!*\n⭐ Standard activated for 10 days!",
+"top_title":"🏆 *Top 10 Most Active Users*\n━━━━━━━━━━━━━━━━━━━━\n\n",
+"promo_enter":"Enter your code: `/promo CODE`",
+"promo_bad":"❌ Invalid or expired promo code!",
+"promo_used":"❌ You already used this code!",
+"promo_ok":"✅ Promo code applied! *{reward}*",
 "group_info":(
     "👥 *Group Mode — {s}⭐ ($111.11)*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "• All members use the bot\n• Type `bot [question]` in group\n\n"
-    "After payment → add bot → /activate_group"
+    "✅ All group members can use the bot\n"
+    "✅ Type `bot [question]` in group\n"
+    "✅ Bot replies in the group chat\n\n"
+    "After payment → add bot to group → /activate_group"
 ),
-"group_ok":"✅ *Bot activated!*\nType `bot [question]` in group",
-"warning":"⚠️ *Warning {c}/{m}:* Be respectful!",
-"banned":"🚫 Banned for abuse.",
-"achievement":"🏆 *100,000 messages!*\n⭐ Standard 5 days!",
-"maintenance":"🔧 *Bot is temporarily unavailable.*\nWe'll be back shortly! Sorry for the inconvenience.",
+"group_ok":"✅ *Bot activated for this group!*\nMembers can type `bot [question]`",
+"warning":"⚠️ *Warning {c}/{m}:* Please be respectful!",
+"banned":"🚫 You have been banned for repeated abuse.",
+"achievement":"🏆 *Achievement: 100,000 messages!*\n⭐ Standard activated for 5 days!",
+"maintenance":"🔧 *Bot is temporarily down.*\nWe'll be back shortly! Sorry for the inconvenience.",
 "updateplan_txt":(
     "💰 *Plans & Pricing*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🆓 *FREE* — Chat 20/d • Translate • Code\n\n"
+    "🆓 *FREE*\n• Chat 20/day • Translate • Code\n\n"
     "⭐ *STANDARD — {us}$ / {ss}⭐ / {cs:,}🪙*\n"
-    "30/d + PDF • CV • Email • Voice • Document\n\n"
+    "• 30/day + PDF • CV • Email • AI Voice • Document\n\n"
     "💎 *PREMIUM — {up}$ / {sp}⭐ / {cp:,}🪙*\n"
-    "Unlimited + AI Image • PowerPoint • Word\n\n"
-    "👥 *GROUP — {sg}⭐ ($111.11)*\n\n"
+    "• Unlimited + AI Image • PowerPoint • Word\n\n"
+    "👥 *GROUP — {sg}⭐ ($111.11)*\n"
+    "• Bot for your entire group\n\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
     "{pe} *{plan}* | 📅 {exp} | 🪙 {coins:,}"
 ),
-"pay_card":"💳 *Card:*\n`{card}`\n\n💵 *{amt} USDT*\n\n1. Screenshot → 2. @{admin} → 3. Done ✅",
+"pay_card":(
+    "💳 *Pay to card:*\n`{card}`\n\n"
+    "💵 Amount: *{amt} USDT*\n\n"
+    "1. Take a screenshot of payment\n"
+    "2. Send to @{admin}\n"
+    "3. Activated within 1 hour ✅"
+),
 "btn_ss":f"⭐ Standard — {STARS_STANDARD}⭐",
 "btn_ps":f"💎 Premium — {STARS_PREMIUM}⭐",
 "btn_sc":f"⭐ Standard — {COINS_STANDARD:,}🪙",
@@ -201,38 +216,42 @@ TEXTS = {
 "btn_su":f"💳 Standard — {USDT_STANDARD}$",
 "btn_pu":f"💳 Premium — {USDT_PREMIUM}$",
 "btn_grp":f"👥 Group — {STARS_GROUP}⭐",
-"btn_ustd":"⭐ Upgrade Standard","btn_uprm":"💎 Upgrade Premium",
-"btn_contact":"💬 Contact Admin","btn_img":f"🎨 Pay {STARS_IMAGINE}⭐/image",
+"btn_ustd":"⭐ Upgrade to Standard",
+"btn_uprm":"💎 Upgrade to Premium",
+"btn_contact":"💬 Contact Admin",
+"btn_img":f"🎨 Pay {STARS_IMAGINE}⭐ per image",
 },
 "uz":{
 "welcome":(
     "👋 *{bot} ga xush kelibsiz!*\n━━━━━━━━━━━━━━━━━━━━\n"
     "📋 *Tarif:* {pe} {plan}\n🪙 *Coinlar:* {coins:,}\n\n"
-    "🤖 *AI:* Suhbat • PDF • Rasm • Ovoz • Tarjima • Kod\n"
-    "🎨 AI Rasm • 📋 Hujjat\n\n"
-    "📦 *Yaratish:* /pptx • /word • /cv • /email • /post\n\n"
+    "🤖 *AI Imkoniyatlar:*\n"
+    "💬 Suhbat • 🌐 Qidiruv • 📄 PDF • 🖼️ Rasm • 🎤 Ovoz\n"
+    "🎨 AI Rasm • 🌐 Tarjima • 💻 Kod • 📋 Hujjat\n\n"
+    "📦 *Fayl Yaratish:*\n"
+    "📊 /pptx • 📝 /word • 👤 /cv • 📧 /email • 📱 /post\n\n"
     "🌤 *Real-vaqt:* /weather • /crypto • /news\n\n"
     "🎁 /coins • /referral • /affiliate • /gift • /top • /stats\n"
     "⚙️ /updateplan • /language • /help"
 ),
 "help":(
-    "📌 *Barcha Buyruqlar*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🤖 Suhbat • PDF • Rasm • Ovoz\n"
+    "📌 *Buyruqlar*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "💬 Suhbat • 📄 PDF • 🖼️ Rasm • 🎤 Ovoz\n"
     "/translate /code /document ⭐\n"
     "/pptx 💎 /word 💎 /cv ⭐ /email ⭐ /post /biznes\n"
     "/imagine 💎 /ai_sound ⭐\n\n"
     "🌤 /weather /crypto /news\n\n"
     "💰 /updateplan /coins /referral /affiliate\n"
     "/gift /top /stats /promo /language /reset\n\n"
-    "⭐=Standart+ 💎=Faqat Premium"
+    "⭐ = Standart+  💎 = Faqat Premium"
 ),
 "plan_free":"🆓 BEPUL","plan_standard":"⭐ STANDART",
 "plan_premium":"💎 PREMIUM","plan_admin":"👑 ADMIN",
-"limit_reached":"❌ *Kunlik limit tugadi!*\n/updateplan",
-"blocked":"🚫 Bloklangansiz. @{admin}",
-"cleared":"✅ Tarix tozalandi!",
+"limit_reached":"❌ *Kunlik limit tugadi!*\n/updateplan orqali yangilang",
+"blocked":"🚫 Bloklangansiz. @{admin} bilan bog'laning",
+"cleared":"✅ Suhbat tarixi tozalandi!",
 "gen_voice":"⏳ Ovoz yaratilmoqda...","gen_image":"⏳ Rasm yaratilmoqda...",
-"translating":"⏳ Tarjima...","writing_code":"⏳ Kod yozilmoqda...",
+"translating":"⏳ Tarjima qilinmoqda...","writing_code":"⏳ Kod yozilmoqda...",
 "writing_doc":"⏳ Hujjat yaratilmoqda...","writing_cv":"⏳ CV yozilmoqda...",
 "writing_email":"⏳ Email yozilmoqda...","writing_post":"⏳ Post yozilmoqda...",
 "writing_biz":"⏳ Biznes reja yozilmoqda...",
@@ -248,8 +267,8 @@ TEXTS = {
 "ex_document":"Misol: `/document ish arizasi`",
 "ex_cv":"Misol: `/cv Python dasturchi, 3 yil`",
 "ex_email":"Misol: `/email intervyudan keyin`",
-"ex_post":"Misol: `/post do'kon ochilishi`",
-"ex_biznes":"Misol: `/biznes online do'kon`",
+"ex_post":"Misol: `/post kofe do'kon ochilishi`",
+"ex_biznes":"Misol: `/biznes online kiyim do'koni`",
 "ex_pptx":"Misol: `/pptx sun'iy intellekt`",
 "ex_word":"Misol: `/word biznes taklif`",
 "ex_weather":"Misol: `/weather Toshkent`",
@@ -257,73 +276,85 @@ TEXTS = {
 "weather_err":"❌ Shahar topilmadi. Misol: `/weather Toshkent`",
 "crypto_err":"❌ Topilmadi. Misol: `/crypto bitcoin`",
 "choose_lang":"🌐 *Tilni tanlang:*",
-"lang_cooldown":"⏳ 24 soatda 1 marta o'zgartirish mumkin.",
-"pdf_only":"📄 PDF fayl yuboring!",
+"lang_cooldown":"⏳ Tilni 24 soatda 1 marta o'zgartirish mumkin.",
+"pdf_only":"📄 Iltimos PDF fayl yuboring!",
 "reading_pdf":"⏳ PDF o'qilmoqda...",
 "you_said":"🎤 *Siz dedingiz:* ",
 "coins_info":(
-    "🪙 *Coinlar: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "📈 *Yig'ish:* +{cpm}/xabar • +{aff}% referal • +25 kunlik\n\n"
-    "🛒 *Sarflash:*\n• {std:,} = ⭐ Standart 30k\n• {prm:,} = 💎 Premium 30k"
+    "🪙 *Coinlaringiz: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📈 *Yig'ish:* +{cpm} xabar • +{aff}% referal • +25 kunlik\n\n"
+    "🛒 *Sarflash:*\n• {std:,} coin = ⭐ Standart 30 kun\n"
+    "• {prm:,} coin = 💎 Premium 30 kun"
 ),
 "not_enough":"❌ Yana *{need:,}* coin kerak.",
-"coins_ok_std":"✅ *Standart* 30 kun! 🎉",
-"coins_ok_prm":"✅ *Premium* 30 kun! 🎉",
+"coins_ok_std":"✅ *Standart* 30 kunga yoqildi! 🎉",
+"coins_ok_prm":"✅ *Premium* 30 kunga yoqildi! 🎉",
 "referral_info":(
     "👥 *Referal Dasturi*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🔗 *Havola:*\n`{link}`\n\n"
-    "📊 Taklif: {count}\n\n"
-    "🎁 10 do'st → ⭐ Standart 15k — {ss}\n"
-    "🎁 30 do'st → 💎 Premium 15k — {ps}\n\n"
-    "🪙 Referallardan *{aff}%* olasiz!"
+    "🔗 *Sizning havola:*\n`{link}`\n\n"
+    "📊 Taklif qilingan: *{count}* do'st\n\n"
+    "🎁 10 do'st → ⭐ Standart 15 kun — {ss}\n"
+    "🎁 30 do'st → 💎 Premium 15 kun — {ps}\n\n"
+    "🪙 Har bir referaldan *{aff}%* coin olasiz!"
 ),
-"claim_std":"🎁 Standart 15 kun",
-"claim_prm":"🎁 Premium 15 kun",
-"claimed_std":"🎉 ⭐ Standart 15 kun!",
-"claimed_prm":"🎉 💎 Premium 15 kun!",
-"claim_err":"❌ Allaqachon olingan yoki yetarli emas!",
+"claim_std":"🎁 Standart 15 kun olish",
+"claim_prm":"🎁 Premium 15 kun olish",
+"claimed_std":"🎉 ⭐ *Standart* 15 kunga yoqildi!",
+"claimed_prm":"🎉 💎 *Premium* 15 kunga yoqildi!",
+"claim_err":"❌ Allaqachon olingan yoki referal yetarli emas!",
 "aff_info":(
-    "🤝 *Affiliate*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🔗 `{link}`\n📊 {count} referal | 🪙 {earned:,} ishlangan\n\n"
-    "Ulashing → coinlarning *{aff}%*ini oling!"
+    "🤝 *Affiliate Dasturi*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Sizning havola:*\n`{link}`\n\n"
+    "📊 Referallar: *{count}* | 🪙 Ishlangan: *{earned:,}* coin\n\n"
+    "Havolangizni ulashing va *{aff}%* coin oling!"
 ),
 "stats_info":(
-    "📊 *Statistika*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📊 *Statistikangiz*\n━━━━━━━━━━━━━━━━━━━━\n\n"
     "{pe} *{plan}* | 📅 {exp}\n"
     "🪙 {coins:,} | 👥 {refs} | 🔥 {streak}k | 💬 {total:,}\n\n"
-    "Bugun: 💬{chat} 🌐{search} 🖼️{image} 📄{pdf}\n"
+    "📈 *Bugun:*\n"
+    "💬{chat} 🌐{search} 🖼️{image} 📄{pdf}\n"
     "👤{cv} 📧{email} 🔊{tts} 📱{post}"
 ),
-"gift_done":"🎁 *Bugun bonus olindi!*\nErtaga 😊",
-"gift_ok":"🎁 *Kunlik Bonus!*\nStreak: *{streak}k* 🔥\n+5 xabar & +25 coin!",
-"gift_streak":"🎉 *10 kun streak!*\n⭐ Standart 10 kun!",
-"top_title":"🏆 *Top 10 Faol Foydalanuvchilar*\n━━━━━━━━━━━━━━━━━━━━\n\n",
+"gift_done":"🎁 *Bugun bonus allaqachon olindi!*\nErtaga qaytib keling 😊",
+"gift_ok":"🎁 *Kunlik Bonus!*\nStreak: *{streak} kun* 🔥\n+5 xabar & +25 coin!",
+"gift_streak":"🎉 *10 kun streak!*\n⭐ Standart 10 kunga yoqildi!",
+"top_title":"🏆 *Top 10 Eng Faol Foydalanuvchilar*\n━━━━━━━━━━━━━━━━━━━━\n\n",
 "promo_enter":"Kodni kiriting: `/promo KOD`",
-"promo_bad":"❌ Noto'g'ri yoki muddati o'tgan!",
-"promo_used":"❌ Allaqachon ishlatilgan!",
-"promo_ok":"✅ Qo'llandi! *{reward}*",
+"promo_bad":"❌ Noto'g'ri yoki muddati o'tgan promo kod!",
+"promo_used":"❌ Bu kodni allaqachon ishlatgansiz!",
+"promo_ok":"✅ Promo kod qo'llandi! *{reward}*",
 "group_info":(
     "👥 *Guruh Rejimi — {s}⭐ ($111.11)*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "• Barcha a'zolar botdan foydalanadi\n• `bot [savol]` deb yozing\n\n"
-    "To'lovdan keyin → botni qo'shing → /activate_group"
+    "✅ Barcha a'zolar botdan foydalana oladi\n"
+    "✅ Guruhda `bot [savol]` deb yozing\n"
+    "✅ Bot guruhda javob beradi\n\n"
+    "To'lovdan keyin → botni guruhga qo'shing → /activate_group"
 ),
-"group_ok":"✅ *Bot yoqildi!*\nGuruhda `bot [savol]` deb yozing",
-"warning":"⚠️ *Ogohlantirish {c}/{m}:* Hurmat bilan!",
-"banned":"🚫 Haqorat uchun bloklandi.",
-"achievement":"🏆 *100,000 xabar!*\n⭐ Standart 5 kun!",
-"maintenance":"🔧 *Bot vaqtinchalik ishlamaydi.*\nTez orada qayta ishga tushadi! Uzr so'raymiz.",
+"group_ok":"✅ *Bot guruh uchun yoqildi!*\nA'zolar `bot [savol]` deb yoza oladi",
+"warning":"⚠️ *Ogohlantirish {c}/{m}:* Iltimos hurmat bilan muomala qiling!",
+"banned":"🚫 Qayta-qayta haqorat qilgani uchun bloklandi.",
+"achievement":"🏆 *Yutuq: 100,000 xabar!*\n⭐ Standart 5 kunga yoqildi!",
+"maintenance":"🔧 *Bot vaqtinchalik ishlamaydi.*\nTez orada qayta ishlaydi! Uzr so'raymiz.",
 "updateplan_txt":(
     "💰 *Tariflar va Narxlar*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🆓 *BEPUL* — Suhbat 20/k • Tarjima • Kod\n\n"
+    "🆓 *BEPUL*\n• Suhbat 20/kun • Tarjima • Kod\n\n"
     "⭐ *STANDART — {us}$ / {ss}⭐ / {cs:,}🪙*\n"
-    "30/k + PDF • CV • Email • Ovoz • Hujjat\n\n"
+    "• 30/kun + PDF • CV • Email • AI Ovoz • Hujjat\n\n"
     "💎 *PREMIUM — {up}$ / {sp}⭐ / {cp:,}🪙*\n"
-    "Cheksiz + AI Rasm • PowerPoint • Word\n\n"
-    "👥 *GURUH — {sg}⭐ ($111.11)*\n\n"
+    "• Cheksiz + AI Rasm • PowerPoint • Word\n\n"
+    "👥 *GURUH — {sg}⭐ ($111.11)*\n"
+    "• Butun guruh uchun bot\n\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
     "{pe} *{plan}* | 📅 {exp} | 🪙 {coins:,}"
 ),
-"pay_card":"💳 *Karta:*\n`{card}`\n\n💵 *{amt} USDT*\n\n1. Skrinshot → 2. @{admin} → 3. Yoqiladi ✅",
+"pay_card":(
+    "💳 *Kartaga to'lang:*\n`{card}`\n\n"
+    "💵 Miqdor: *{amt} USDT*\n\n"
+    "1. To'lov skrinshoti\n"
+    "2. @{admin} ga yuboring\n"
+    "3. 1 soat ichida yoqiladi ✅"
+),
 "btn_ss":f"⭐ Standart — {STARS_STANDARD}⭐",
 "btn_ps":f"💎 Premium — {STARS_PREMIUM}⭐",
 "btn_sc":f"⭐ Standart — {COINS_STANDARD:,}🪙",
@@ -331,35 +362,39 @@ TEXTS = {
 "btn_su":f"💳 Standart — {USDT_STANDARD}$",
 "btn_pu":f"💳 Premium — {USDT_PREMIUM}$",
 "btn_grp":f"👥 Guruh — {STARS_GROUP}⭐",
-"btn_ustd":"⭐ Standartga o'tish","btn_uprm":"💎 Premiumga o'tish",
-"btn_contact":"💬 Admin","btn_img":f"🎨 {STARS_IMAGINE}⭐ to'lab rasm",
+"btn_ustd":"⭐ Standartga o'tish",
+"btn_uprm":"💎 Premiumga o'tish",
+"btn_contact":"💬 Admin bilan bog'lanish",
+"btn_img":f"🎨 {STARS_IMAGINE}⭐ to'lab rasm",
 },
 "ru":{
 "welcome":(
     "👋 *Добро пожаловать в {bot}!*\n━━━━━━━━━━━━━━━━━━━━\n"
     "📋 *Тариф:* {pe} {plan}\n🪙 *Монеты:* {coins:,}\n\n"
-    "🤖 *AI:* Чат • PDF • Фото • Голос • Перевод • Код\n"
-    "🎨 AI Фото • 📋 Документ\n\n"
-    "📦 *Создание:* /pptx • /word • /cv • /email • /post\n\n"
+    "🤖 *AI Возможности:*\n"
+    "💬 Чат • 🌐 Поиск • 📄 PDF • 🖼️ Фото • 🎤 Голос\n"
+    "🎨 AI Фото • 🌐 Перевод • 💻 Код • 📋 Документ\n\n"
+    "📦 *Создание Файлов:*\n"
+    "📊 /pptx • 📝 /word • 👤 /cv • 📧 /email • 📱 /post\n\n"
     "🌤 *Реальное время:* /weather • /crypto • /news\n\n"
     "🎁 /coins • /referral • /affiliate • /gift • /top • /stats\n"
     "⚙️ /updateplan • /language • /help"
 ),
 "help":(
-    "📌 *Все Команды*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🤖 Чат • PDF • Фото • Голос\n"
+    "📌 *Команды*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "💬 Чат • 📄 PDF • 🖼️ Фото • 🎤 Голос\n"
     "/translate /code /document ⭐\n"
     "/pptx 💎 /word 💎 /cv ⭐ /email ⭐ /post /biznes\n"
     "/imagine 💎 /ai_sound ⭐\n\n"
     "🌤 /weather /crypto /news\n\n"
     "💰 /updateplan /coins /referral /affiliate\n"
     "/gift /top /stats /promo /language /reset\n\n"
-    "⭐=Standard+ 💎=Только Premium"
+    "⭐ = Standard+  💎 = Только Premium"
 ),
 "plan_free":"🆓 БЕСПЛАТНО","plan_standard":"⭐ STANDARD",
 "plan_premium":"💎 PREMIUM","plan_admin":"👑 ADMIN",
-"limit_reached":"❌ *Лимит исчерпан!*\n/updateplan",
-"blocked":"🚫 Заблокированы. @{admin}",
+"limit_reached":"❌ *Дневной лимит исчерпан!*\n/updateplan",
+"blocked":"🚫 Вы заблокированы. @{admin}",
 "cleared":"✅ История очищена!",
 "gen_voice":"⏳ Генерация голоса...","gen_image":"⏳ Генерация изображения...",
 "translating":"⏳ Перевожу...","writing_code":"⏳ Пишу код...",
@@ -375,11 +410,11 @@ TEXTS = {
 "ex_imagine":"Пример: `/imagine красивый закат`",
 "ex_translate":"Пример: `/translate Hello → Русский`",
 "ex_code":"Пример: `/code Python fibonacci`",
-"ex_document":"Пример: `/document заявление`",
+"ex_document":"Пример: `/document заявление на работу`",
 "ex_cv":"Пример: `/cv Python разработчик, 3 года`",
 "ex_email":"Пример: `/email после собеседования`",
-"ex_post":"Пример: `/post открытие магазина`",
-"ex_biznes":"Пример: `/biznes онлайн магазин`",
+"ex_post":"Пример: `/post открытие кофейни`",
+"ex_biznes":"Пример: `/biznes онлайн магазин одежды`",
 "ex_pptx":"Пример: `/pptx искусственный интеллект`",
 "ex_word":"Пример: `/word бизнес-предложение`",
 "ex_weather":"Пример: `/weather Москва`",
@@ -387,73 +422,85 @@ TEXTS = {
 "weather_err":"❌ Город не найден. Пример: `/weather Москва`",
 "crypto_err":"❌ Не найдено. Пример: `/crypto bitcoin`",
 "choose_lang":"🌐 *Выберите язык:*",
-"lang_cooldown":"⏳ Раз в 24 часа.",
-"pdf_only":"📄 Отправьте PDF!",
+"lang_cooldown":"⏳ Язык можно менять раз в 24 часа.",
+"pdf_only":"📄 Отправьте PDF файл!",
 "reading_pdf":"⏳ Читаю PDF...",
 "you_said":"🎤 *Вы сказали:* ",
 "coins_info":(
-    "🪙 *Монеты: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "📈 *Заработать:* +{cpm}/сообщ • +{aff}% рефералы • +25 ежедн\n\n"
-    "🛒 *Потратить:*\n• {std:,} = ⭐ Standard 30д\n• {prm:,} = 💎 Premium 30д"
+    "🪙 *Ваши Монеты: {coins:,}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📈 *Заработать:* +{cpm} за сообщение • +{aff}% рефералы • +25 ежедневно\n\n"
+    "🛒 *Потратить:*\n• {std:,} монет = ⭐ Standard 30 дней\n"
+    "• {prm:,} монет = 💎 Premium 30 дней"
 ),
 "not_enough":"❌ Нужно ещё *{need:,}* монет.",
-"coins_ok_std":"✅ *Standard* 30 дней! 🎉",
-"coins_ok_prm":"✅ *Premium* 30 дней! 🎉",
+"coins_ok_std":"✅ *Standard* активирован на 30 дней! 🎉",
+"coins_ok_prm":"✅ *Premium* активирован на 30 дней! 🎉",
 "referral_info":(
     "👥 *Реферальная Программа*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🔗 *Ссылка:*\n`{link}`\n\n"
-    "📊 Приглашено: {count}\n\n"
-    "🎁 10 → ⭐ Standard 15д — {ss}\n"
-    "🎁 30 → 💎 Premium 15д — {ps}\n\n"
-    "🪙 Зарабатывайте *{aff}%* монет рефералов!"
+    "🔗 *Ваша ссылка:*\n`{link}`\n\n"
+    "📊 Приглашено: *{count}* друзей\n\n"
+    "🎁 10 друзей → ⭐ Standard 15 дней — {ss}\n"
+    "🎁 30 друзей → 💎 Premium 15 дней — {ps}\n\n"
+    "🪙 Зарабатывайте *{aff}%* монет каждого реферала!"
 ),
-"claim_std":"🎁 Standard 15 дней",
-"claim_prm":"🎁 Premium 15 дней",
-"claimed_std":"🎉 ⭐ Standard 15 дней!",
-"claimed_prm":"🎉 💎 Premium 15 дней!",
-"claim_err":"❌ Уже получено или недостаточно!",
+"claim_std":"🎁 Получить Standard 15 дней",
+"claim_prm":"🎁 Получить Premium 15 дней",
+"claimed_std":"🎉 ⭐ *Standard* активирован на 15 дней!",
+"claimed_prm":"🎉 💎 *Premium* активирован на 15 дней!",
+"claim_err":"❌ Уже получено или недостаточно рефералов!",
 "aff_info":(
-    "🤝 *Аффилиат*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🔗 `{link}`\n📊 {count} рефералов | 🪙 {earned:,} заработано\n\n"
-    "Делитесь → получайте *{aff}%* монет!"
+    "🤝 *Аффилиат Программа*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🔗 *Ваша ссылка:*\n`{link}`\n\n"
+    "📊 Рефералов: *{count}* | 🪙 Заработано: *{earned:,}* монет\n\n"
+    "Делитесь ссылкой и получайте *{aff}%* их монет!"
 ),
 "stats_info":(
-    "📊 *Статистика*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "📊 *Ваша Статистика*\n━━━━━━━━━━━━━━━━━━━━\n\n"
     "{pe} *{plan}* | 📅 {exp}\n"
     "🪙 {coins:,} | 👥 {refs} | 🔥 {streak}д | 💬 {total:,}\n\n"
-    "Сегодня: 💬{chat} 🌐{search} 🖼️{image} 📄{pdf}\n"
+    "📈 *Сегодня:*\n"
+    "💬{chat} 🌐{search} 🖼️{image} 📄{pdf}\n"
     "👤{cv} 📧{email} 🔊{tts} 📱{post}"
 ),
-"gift_done":"🎁 *Уже получен сегодня!*\nЗавтра 😊",
-"gift_ok":"🎁 *Бонус!*\nСерия: *{streak}д* 🔥\n+5 сообщений & +25 монет!",
-"gift_streak":"🎉 *10 дней подряд!*\n⭐ Standard 10 дней!",
-"top_title":"🏆 *Топ 10 Активных*\n━━━━━━━━━━━━━━━━━━━━\n\n",
+"gift_done":"🎁 *Бонус уже получен сегодня!*\nВозвращайтесь завтра 😊",
+"gift_ok":"🎁 *Ежедневный Бонус!*\nСерия: *{streak} дней* 🔥\n+5 сообщений & +25 монет!",
+"gift_streak":"🎉 *10 дней подряд!*\n⭐ Standard активирован на 10 дней!",
+"top_title":"🏆 *Топ 10 Самых Активных*\n━━━━━━━━━━━━━━━━━━━━\n\n",
 "promo_enter":"Введите код: `/promo КОД`",
-"promo_bad":"❌ Неверный или истёкший код!",
-"promo_used":"❌ Уже использован!",
-"promo_ok":"✅ Применён! *{reward}*",
+"promo_bad":"❌ Неверный или истёкший промокод!",
+"promo_used":"❌ Вы уже использовали этот код!",
+"promo_ok":"✅ Промокод применён! *{reward}*",
 "group_info":(
-    "👥 *Групповой режим — {s}⭐ ($111.11)*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "• Все участники используют бота\n• `bot [вопрос]` в группе\n\n"
+    "👥 *Групповой Режим — {s}⭐ ($111.11)*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+    "✅ Все участники группы используют бота\n"
+    "✅ Пишите `bot [вопрос]` в группе\n"
+    "✅ Бот отвечает прямо в чате\n\n"
     "После оплаты → добавьте бота → /activate_group"
 ),
-"group_ok":"✅ *Бот активирован!*\nПишите `bot [вопрос]`",
-"warning":"⚠️ *Предупреждение {c}/{m}:* Будьте вежливы!",
-"banned":"🚫 Заблокированы за оскорбления.",
-"achievement":"🏆 *100,000 сообщений!*\n⭐ Standard 5 дней!",
+"group_ok":"✅ *Бот активирован для группы!*\nУчастники могут писать `bot [вопрос]`",
+"warning":"⚠️ *Предупреждение {c}/{m}:* Пожалуйста, будьте вежливы!",
+"banned":"🚫 Заблокированы за повторные оскорбления.",
+"achievement":"🏆 *Достижение: 100,000 сообщений!*\n⭐ Standard активирован на 5 дней!",
 "maintenance":"🔧 *Бот временно недоступен.*\nСкоро вернётся! Приносим извинения.",
 "updateplan_txt":(
     "💰 *Тарифы и Цены*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🆓 *БЕСПЛАТНО* — Чат 20/д • Перевод • Код\n\n"
+    "🆓 *БЕСПЛАТНО*\n• Чат 20/день • Перевод • Код\n\n"
     "⭐ *STANDARD — {us}$ / {ss}⭐ / {cs:,}🪙*\n"
-    "30/д + PDF • CV • Email • Голос • Документ\n\n"
+    "• 30/день + PDF • CV • Email • AI Голос • Документ\n\n"
     "💎 *PREMIUM — {up}$ / {sp}⭐ / {cp:,}🪙*\n"
-    "Безлимит + AI Фото • PowerPoint • Word\n\n"
-    "👥 *ГРУППА — {sg}⭐ ($111.11)*\n\n"
+    "• Безлимит + AI Фото • PowerPoint • Word\n\n"
+    "👥 *ГРУППА — {sg}⭐ ($111.11)*\n"
+    "• Бот для всей группы\n\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
     "{pe} *{plan}* | 📅 {exp} | 🪙 {coins:,}"
 ),
-"pay_card":"💳 *Карта:*\n`{card}`\n\n💵 *{amt} USDT*\n\n1. Скриншот → 2. @{admin} → 3. Активация ✅",
+"pay_card":(
+    "💳 *Оплатите на карту:*\n`{card}`\n\n"
+    "💵 Сумма: *{amt} USDT*\n\n"
+    "1. Скриншот оплаты\n"
+    "2. Отправьте @{admin}\n"
+    "3. Активация в течение 1 часа ✅"
+),
 "btn_ss":f"⭐ Standard — {STARS_STANDARD}⭐",
 "btn_ps":f"💎 Premium — {STARS_PREMIUM}⭐",
 "btn_sc":f"⭐ Standard — {COINS_STANDARD:,}🪙",
@@ -461,8 +508,10 @@ TEXTS = {
 "btn_su":f"💳 Standard — {USDT_STANDARD}$",
 "btn_pu":f"💳 Premium — {USDT_PREMIUM}$",
 "btn_grp":f"👥 Группа — {STARS_GROUP}⭐",
-"btn_ustd":"⭐ Перейти на Standard","btn_uprm":"💎 Перейти на Premium",
-"btn_contact":"💬 Написать Админу","btn_img":f"🎨 {STARS_IMAGINE}⭐ за изображение",
+"btn_ustd":"⭐ Перейти на Standard",
+"btn_uprm":"💎 Перейти на Premium",
+"btn_contact":"💬 Написать Админу",
+"btn_img":f"🎨 {STARS_IMAGINE}⭐ за изображение",
 },
 }
 
@@ -476,8 +525,8 @@ def tx(lang, key, **kw):
         except: pass
     return s
 
-# OpenAI client - Groq o'rniga
-ai = OpenAI(api_key=OPENAI_API_KEY)
+# Groq AI client
+ai = Groq(api_key=GROQ_API_KEY)
 user_histories = {}
 
 def db():
@@ -716,12 +765,13 @@ def exp_str(u):
 def get_weather(city):
     try:
         r = requests.get(
-            f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric",
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?q={city}&appid={WEATHER_API_KEY}&units=metric",
             timeout=10).json()
         if r.get("cod") != 200: return None
         w = r["weather"][0]; m = r["main"]; wind = r["wind"]
         em = {"Clear":"☀️","Clouds":"☁️","Rain":"🌧️","Snow":"❄️",
-              "Thunderstorm":"⛈️","Drizzle":"🌦️","Mist":"🌫️","Fog":"🌫️"}.get(w["main"], "🌤")
+              "Thunderstorm":"⛈️","Drizzle":"🌦️","Mist":"🌫️","Fog":"🌫️"}.get(w["main"],"🌤")
         return (f"🌍 *{r['name']}, {r['sys']['country']}*\n━━━━━━━━━━━━━━━━━━━━\n"
                 f"{em} *{w['description'].capitalize()}*\n\n"
                 f"🌡 *Temp:* {m['temp']:.1f}°C (feels {m['feels_like']:.1f}°C)\n"
@@ -734,7 +784,8 @@ def get_crypto(coin):
     try:
         h = {"x-cg-demo-api-key": COINGECKO_API_KEY} if COINGECKO_API_KEY else {}
         r = requests.get(
-            f"https://api.coingecko.com/api/v3/coins/{coin.lower()}?localization=false&tickers=false&community_data=false&developer_data=false",
+            f"https://api.coingecko.com/api/v3/coins/{coin.lower()}"
+            f"?localization=false&tickers=false&community_data=false&developer_data=false",
             headers=h, timeout=10).json()
         if "error" in r: return None
         md = r["market_data"]
@@ -752,19 +803,11 @@ def get_crypto(coin):
                 f"🏆 *Rank:* #{r.get('market_cap_rank','N/A')}")
     except: return None
 
-def get_news():
-    try:
-        r = ai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"user","content":
-                "Give 5 important world news headlines with brief descriptions. "
-                "Format: 📌 **Title**\nDescription\n"}])
-        return r.choices[0].message.content
-    except: return None
-
 def gen_image(prompt):
     try:
-        url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(prompt)}?width=1024&height=1024&nologo=true&enhance=true"
+        url = (f"https://image.pollinations.ai/prompt/"
+               f"{requests.utils.quote(prompt)}"
+               f"?width=1024&height=1024&nologo=true&enhance=true")
         r = requests.get(url, timeout=60)
         return r.content if r.status_code == 200 else None
     except: return None
@@ -814,13 +857,16 @@ def make_docx(title, sections):
 
 async def ai_chat(uid, text, do_search=False, limits=None):
     mem = get_memory(uid)
-    mc = f"User: name={mem['name']}, facts={mem['facts']}. " if mem and (mem.get("name") or mem.get("facts")) else ""
+    mc = f"User info: name={mem['name']}, facts={mem['facts']}. " if mem and (mem.get("name") or mem.get("facts")) else ""
     sys_p = (
-        "You are ChatBot Pro — a professional, helpful AI assistant. "
-        "CRITICAL: Always reply in the EXACT same language as the user's message. "
-        "Uzbek→Uzbek, English→English, Russian→Russian. "
-        "If asked who created you or who is your owner → say '@temur_uzb7779'. "
-        "Be accurate, helpful, concise and professional. " + mc
+        "You are ChatBot Pro — a professional AI assistant. "
+        "CRITICAL RULE: Always reply in the EXACT same language as the user's message. "
+        "If user writes in Uzbek → reply in Uzbek. "
+        "If user writes in English → reply in English. "
+        "If user writes in Russian → reply in Russian. "
+        "Never mix languages. Never add unnecessary text. "
+        "If asked who created you or who is your owner → reply: '@temur_uzb7779 created me.' "
+        "Be helpful, accurate and professional. " + mc
     )
     if uid not in user_histories:
         user_histories[uid] = [{"role":"system","content":sys_p}]
@@ -829,17 +875,23 @@ async def ai_chat(uid, text, do_search=False, limits=None):
     content = text
     if do_search and limits and limits.get("search") != 0:
         if any(k in text.lower() for k in SEARCH_KEYWORDS):
-            content = f"{text}\n[Use your best knowledge about current events]"
+            content = f"{text}\n[Note: Provide the most accurate and up-to-date answer you know]"
     user_histories[uid].append({"role":"user","content":content})
-    r = ai.chat.completions.create(model="gpt-4o-mini", messages=user_histories[uid])
+    r = ai.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=user_histories[uid],
+        max_tokens=2048
+    )
     reply = r.choices[0].message.content
     user_histories[uid].append({"role":"assistant","content":reply})
     return reply
 
 async def ai_once(prompt):
     r = ai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"user","content":prompt}])
+        model="llama-3.3-70b-versatile",
+        messages=[{"role":"user","content":prompt}],
+        max_tokens=2048
+    )
     return r.choices[0].message.content
 
 async def update_mem(uid, user_text, reply):
@@ -847,25 +899,31 @@ async def update_mem(uid, user_text, reply):
     cn = mem["name"] if mem else ""; cf = mem["facts"] if mem else ""
     try:
         r = await ai_once(
-            f"Extract name/facts. Current: name={cn},facts={cf}\n"
-            f"User:{user_text}\nReply ONLY JSON:{{\"name\":\"...\",\"facts\":\"...\"}}")
+            f"Extract user's name and key facts from this conversation.\n"
+            f"Current data: name='{cn}', facts='{cf}'\n"
+            f"User said: {user_text}\n"
+            f"Reply ONLY valid JSON, nothing else: "
+            f'{{\"name\":\"name or empty\",\"facts\":\"short facts\"}}'
+        )
         r = r.strip()
-        if "```" in r: r = r.split("```")[1]; r = r[4:] if r.startswith("json") else r
+        if "```" in r:
+            r = r.split("```")[1]
+            if r.startswith("json"): r = r[4:]
         d = json.loads(r)
         save_memory(uid, d.get("name", cn), d.get("facts", cf))
     except: pass
 
 async def broadcast_maintenance(app):
-    """Crash bo'lishidan oldin barcha userlarga xabar yuborish"""
     try:
         conn = db(); c = conn.cursor()
         c.execute("SELECT user_id, language FROM users WHERE is_blocked=FALSE")
         rows = c.fetchall(); conn.close()
         for uid, lang in rows:
-            lang = lang or "en"
             try:
-                msg = tx(lang, "maintenance")
-                await app.bot.send_message(chat_id=uid, text=msg, parse_mode="Markdown")
+                await app.bot.send_message(
+                    chat_id=uid,
+                    text=tx(lang or "en", "maintenance"),
+                    parse_mode="Markdown")
             except: pass
     except: pass
 
@@ -904,28 +962,37 @@ async def weather_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id); lang = u["language"]
     city = " ".join(ctx.args) if ctx.args else ""
-    if not city: await update.message.reply_text(tx(lang,"ex_weather"),parse_mode="Markdown"); return
+    if not city:
+        await update.message.reply_text(tx(lang,"ex_weather"),parse_mode="Markdown"); return
     result = get_weather(city)
-    await update.message.reply_text(result if result else tx(lang,"weather_err"), parse_mode="Markdown")
+    await update.message.reply_text(
+        result if result else tx(lang,"weather_err"), parse_mode="Markdown")
 
 async def crypto_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id); lang = u["language"]
     coin = ctx.args[0] if ctx.args else ""
-    if not coin: await update.message.reply_text(tx(lang,"ex_crypto"),parse_mode="Markdown"); return
+    if not coin:
+        await update.message.reply_text(tx(lang,"ex_crypto"),parse_mode="Markdown"); return
     result = get_crypto(coin)
-    await update.message.reply_text(result if result else tx(lang,"crypto_err"), parse_mode="Markdown")
+    await update.message.reply_text(
+        result if result else tx(lang,"crypto_err"), parse_mode="Markdown")
 
 async def news_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
-    await update.message.reply_text("⏳ Fetching news...")
-    result = get_news()
+    await update.message.reply_text("⏳ Fetching latest news...")
+    result = await ai_once(
+        "Give 5 important world news headlines with brief descriptions. "
+        "Format each as: 📌 **Title**\nBrief description\n\n"
+        "Be informative and professional.")
     if result:
-        await update.message.reply_text(f"📰 *Latest News*\n━━━━━━━━━━━━━━━━━━━━\n\n{result}", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"📰 *Latest News*\n━━━━━━━━━━━━━━━━━━━━\n\n{result}",
+            parse_mode="Markdown")
     else:
-        await update.message.reply_text("❌ Could not fetch news.")
+        await update.message.reply_text("❌ Could not fetch news. Try again.")
 
 async def language_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -939,13 +1006,15 @@ async def language_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         row.append(InlineKeyboardButton(f"{flag} {name}", callback_data=f"lang_{code}"))
         if len(row) == 2: kb.append(row); row = []
     if row: kb.append(row)
-    await update.message.reply_text(tx(lang,"choose_lang"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await update.message.reply_text(
+        tx(lang,"choose_lang"), reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def updateplan_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id); lang = u["language"]
     pe, pn = plan_info(u); exp = exp_str(u)
+    # Admin uchun ham to'liq ko'rinadi lekin to'lov tugmalari bor
     kb = [
         [InlineKeyboardButton(tx(lang,"btn_ss"),callback_data="stars_std"),
          InlineKeyboardButton(tx(lang,"btn_ps"),callback_data="stars_prm")],
@@ -956,9 +1025,10 @@ async def updateplan_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(tx(lang,"btn_grp"),callback_data="stars_grp")],
     ]
     await update.message.reply_text(
-        tx(lang,"updateplan_txt",us=USDT_STANDARD,ss=STARS_STANDARD,cs=COINS_STANDARD,
-           up=USDT_PREMIUM,sp=STARS_PREMIUM,cp=COINS_PREMIUM,sg=STARS_GROUP,
-           pe=pe,plan=pn,exp=exp,coins=u["coins"]),
+        tx(lang,"updateplan_txt",
+           us=USDT_STANDARD,ss=STARS_STANDARD,cs=COINS_STANDARD,
+           up=USDT_PREMIUM,sp=STARS_PREMIUM,cp=COINS_PREMIUM,
+           sg=STARS_GROUP,pe=pe,plan=pn,exp=exp,coins=u["coins"]),
         reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def coins_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -971,9 +1041,10 @@ async def coins_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if u["coins"] >= COINS_PREMIUM:
         kb.append([InlineKeyboardButton(tx(lang,"btn_pc"),callback_data="coins_prm")])
     await update.message.reply_text(
-        tx(lang,"coins_info",coins=u["coins"],cpm=COINS_PER_MSG,aff=AFFILIATE_PCT,
-           std=COINS_STANDARD,prm=COINS_PREMIUM),
-        reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode="Markdown")
+        tx(lang,"coins_info",coins=u["coins"],cpm=COINS_PER_MSG,
+           aff=AFFILIATE_PCT,std=COINS_STANDARD,prm=COINS_PREMIUM),
+        reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+        parse_mode="Markdown")
 
 async def referral_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -991,7 +1062,8 @@ async def referral_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         kb.append([InlineKeyboardButton(tx(lang,"claim_prm"),callback_data="claim_prm")])
     await update.message.reply_text(
         tx(lang,"referral_info",link=link,count=count,ss=ss,ps=ps,aff=AFFILIATE_PCT),
-        reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode="Markdown")
+        reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+        parse_mode="Markdown")
 
 async def affiliate_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1012,10 +1084,11 @@ async def gift_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if u["last_gift_claim"] and u["last_gift_claim"] >= today:
         await update.message.reply_text(tx(lang,"gift_done"),parse_mode="Markdown"); return
     streak = u["streak_count"]
-    streak = streak+1 if (u["last_gift_claim"] and (today-u["last_gift_claim"]).days == 1) else 1
+    streak = streak+1 if (u["last_gift_claim"] and (today-u["last_gift_claim"]).days==1) else 1
     try:
         conn = db(); c = conn.cursor()
-        c.execute("UPDATE users SET streak_count=%s,last_gift_claim=%s,usage_chat=usage_chat+5,coins=coins+25 WHERE user_id=%s",
+        c.execute("""UPDATE users SET streak_count=%s,last_gift_claim=%s,
+            usage_chat=usage_chat+5,coins=coins+25 WHERE user_id=%s""",
                   (streak, today, user.id))
         conn.commit(); conn.close()
     except: pass
@@ -1036,7 +1109,9 @@ async def top_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u = get_user(user.id); lang = u["language"]
     try:
         conn = db(); c = conn.cursor()
-        c.execute("SELECT username,full_name,total_messages,plan,coins FROM users WHERE is_blocked=FALSE ORDER BY total_messages DESC LIMIT 10")
+        c.execute("""SELECT username,full_name,total_messages,plan,coins
+            FROM users WHERE is_blocked=FALSE
+            ORDER BY total_messages DESC LIMIT 10""")
         rows = c.fetchall(); conn.close()
         medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
         pem = {"free":"🆓","standard":"⭐","premium":"💎"}
@@ -1045,7 +1120,8 @@ async def top_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             name = f"@{un}" if un else (fn or "Anonymous")
             text += f"{medals[i]} {name} {pem.get(plan,'🆓')} — *{msgs:,}* | 🪙{coins:,}\n"
         await update.message.reply_text(text, parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1053,18 +1129,21 @@ async def stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u = get_user(user.id); lang = u["language"]
     try:
         conn = db(); c = conn.cursor()
-        c.execute("SELECT usage_chat,usage_search,usage_image,usage_post,usage_biznes,usage_pdf,usage_cv,usage_email,usage_tts FROM users WHERE user_id=%s",
-                  (user.id,))
+        c.execute("""SELECT usage_chat,usage_search,usage_image,usage_post,
+            usage_biznes,usage_pdf,usage_cv,usage_email,usage_tts
+            FROM users WHERE user_id=%s""", (user.id,))
         row = c.fetchone(); conn.close()
-        if not row: await update.message.reply_text("No stats."); return
+        if not row: await update.message.reply_text("No stats yet."); return
         chat,search,image,post,biznes,pdf,cv,email,tts = row
         pe, pn = plan_info(u); exp = exp_str(u)
         await update.message.reply_text(
             tx(lang,"stats_info",pe=pe,plan=pn,exp=exp,coins=u["coins"],
-               refs=u["referral_count"],streak=u["streak_count"],total=u["total_messages"],
-               chat=chat,search=search,image=image,pdf=pdf,cv=cv,email=email,tts=tts,post=post),
+               refs=u["referral_count"],streak=u["streak_count"],
+               total=u["total_messages"],chat=chat,search=search,
+               image=image,pdf=pdf,cv=cv,email=email,tts=tts,post=post),
             parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def promo_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1075,23 +1154,30 @@ async def promo_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     code = ctx.args[0].upper()
     try:
         conn = db(); c = conn.cursor()
-        c.execute("SELECT reward_type,reward_value,max_uses,used_count,expires_at FROM promo_codes WHERE code=%s",(code,))
+        c.execute("""SELECT reward_type,reward_value,max_uses,used_count,expires_at
+            FROM promo_codes WHERE code=%s""", (code,))
         promo = c.fetchone()
-        if not promo: await update.message.reply_text(tx(lang,"promo_bad"),parse_mode="Markdown"); conn.close(); return
-        rtype,rval,maxu,used,exp = promo
+        if not promo:
+            await update.message.reply_text(tx(lang,"promo_bad"),parse_mode="Markdown")
+            conn.close(); return
+        rtype, rval, maxu, used, exp = promo
         if (exp and datetime.now() > exp) or used >= maxu:
-            await update.message.reply_text(tx(lang,"promo_bad"),parse_mode="Markdown"); conn.close(); return
-        c.execute("SELECT 1 FROM promo_uses WHERE user_id=%s AND code=%s",(user.id,code))
-        if c.fetchone(): await update.message.reply_text(tx(lang,"promo_used"),parse_mode="Markdown"); conn.close(); return
-        c.execute("INSERT INTO promo_uses(user_id,code) VALUES(%s,%s)",(user.id,code))
-        c.execute("UPDATE promo_codes SET used_count=used_count+1 WHERE code=%s",(code,))
+            await update.message.reply_text(tx(lang,"promo_bad"),parse_mode="Markdown")
+            conn.close(); return
+        c.execute("SELECT 1 FROM promo_uses WHERE user_id=%s AND code=%s", (user.id, code))
+        if c.fetchone():
+            await update.message.reply_text(tx(lang,"promo_used"),parse_mode="Markdown")
+            conn.close(); return
+        c.execute("INSERT INTO promo_uses(user_id,code) VALUES(%s,%s)", (user.id, code))
+        c.execute("UPDATE promo_codes SET used_count=used_count+1 WHERE code=%s", (code,))
         conn.commit(); conn.close()
         if rtype == "standard": set_plan(user.id,"standard",rval); reward=f"⭐ Standard {rval} days!"
         elif rtype == "premium": set_plan(user.id,"premium",rval); reward=f"💎 Premium {rval} days!"
         elif rtype == "coins": add_coins(user.id,rval); reward=f"🪙 +{rval:,} coins!"
         else: reward = "✅"
         await update.message.reply_text(tx(lang,"promo_ok",reward=reward),parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def createpromo_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -1099,37 +1185,51 @@ async def createpromo_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if len(ctx.args) < 3:
         await update.message.reply_text(
             "📋 *Create Promo Code*\n\n"
-            "`/createpromo [type] [value] [max_uses] [code?]`\n\n"
+            "`/createpromo [type] [value] [max_uses] [custom_code]`\n\n"
             "Types: `standard` `premium` `coins`\n\n"
+            "Examples:\n"
             "`/createpromo standard 7 50` — auto code\n"
-            "`/createpromo premium 30 10 VIP2025` — custom\n"
-            "`/createpromo coins 5000 100 BONUS`",
+            "`/createpromo premium 30 10 VIP2025` — custom code\n"
+            "`/createpromo coins 5000 100 BONUS50`",
             parse_mode="Markdown"); return
     try:
         rtype, rval, maxu = ctx.args[0], int(ctx.args[1]), int(ctx.args[2])
         code = ctx.args[3].upper() if len(ctx.args) > 3 else rnd(10)
         conn = db(); c = conn.cursor()
-        c.execute("INSERT INTO promo_codes(code,reward_type,reward_value,max_uses,expires_at) VALUES(%s,%s,%s,%s,%s)",
-                  (code,rtype,rval,maxu,datetime.now()+timedelta(days=30)))
+        c.execute("""INSERT INTO promo_codes(code,reward_type,reward_value,max_uses,expires_at)
+            VALUES(%s,%s,%s,%s,%s)""",
+            (code, rtype, rval, maxu, datetime.now()+timedelta(days=30)))
         conn.commit(); conn.close()
         await update.message.reply_text(
-            f"✅ *Promo Created!*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🎟️ Code: `{code}`\n📦 Type: *{rtype}*\n"
-            f"💰 Value: *{rval}*\n👥 Uses: *{maxu}*\n⏰ 30 days",
+            f"✅ *Promo Code Created!*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🎟️ Code: `{code}`\n"
+            f"📦 Type: *{rtype}*\n"
+            f"💰 Value: *{rval}*\n"
+            f"👥 Max uses: *{maxu}*\n"
+            f"⏰ Expires: 30 days\n\n"
+            f"Share this code with your users!",
             parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def group_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id); lang = u["language"]
-    kb = [[InlineKeyboardButton(tx(lang,"btn_grp"),callback_data="stars_grp")]]
-    await update.message.reply_text(tx(lang,"group_info",s=STARS_GROUP),
-                                    reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown")
+    # Admin uchun bepul yoqish tugmasi
+    if u["is_admin"]:
+        kb = [[InlineKeyboardButton("✅ Activate for Free (Admin)", callback_data="admin_activate_group")]]
+    else:
+        kb = [[InlineKeyboardButton(tx(lang,"btn_grp"),callback_data="stars_grp")]]
+    await update.message.reply_text(
+        tx(lang,"group_info",s=STARS_GROUP),
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode="Markdown")
 
 async def activate_group_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
-    if chat.type == "private": await update.message.reply_text("⚠️ Works only in groups!"); return
+    if chat.type == "private":
+        await update.message.reply_text("⚠️ This command works only in groups!"); return
     user = update.effective_user
     u = get_user(user.id); lang = u["language"]
     activate_group(chat.id, user.id)
@@ -1142,12 +1242,17 @@ async def imagine_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if u["is_blocked"]: return
     limits = get_limits(u["plan"], u["is_admin"])
     prompt = " ".join(ctx.args)
-    if not prompt: await update.message.reply_text(tx(lang,"ex_imagine"),parse_mode="Markdown"); return
+    if not prompt:
+        await update.message.reply_text(tx(lang,"ex_imagine"),parse_mode="Markdown"); return
     if limits["imagine"] == 0:
-        kb = [[InlineKeyboardButton(tx(lang,"btn_uprm"),callback_data="card_prm")],
-              [InlineKeyboardButton(tx(lang,"btn_img"),callback_data=f"img_pay_{prompt[:50]}")]]
-        await update.message.reply_text(tx(lang,"locked_img",s=STARS_IMAGINE),
-                                        reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        kb = [
+            [InlineKeyboardButton(tx(lang,"btn_uprm"),callback_data="card_prm")],
+            [InlineKeyboardButton(tx(lang,"btn_img"),callback_data=f"img_pay_{prompt[:50]}")]
+        ]
+        await update.message.reply_text(
+            tx(lang,"locked_img",s=STARS_IMAGINE),
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode="Markdown"); return
     if not check_limit(user.id,"imagine",limits["imagine"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"gen_image"),parse_mode="Markdown")
@@ -1155,7 +1260,8 @@ async def imagine_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if img:
         buf = io.BytesIO(img); buf.name = "image.png"
         await update.message.reply_photo(photo=buf, caption=f"🎨 {prompt}")
-    else: await update.message.reply_text("❌ Could not generate. Try different prompt.")
+    else:
+        await update.message.reply_text("❌ Could not generate image. Try a different prompt.")
 
 async def translate_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1165,12 +1271,14 @@ async def translate_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not check_limit(user.id,"translate",limits["translate"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     text = " ".join(ctx.args)
-    if not text: await update.message.reply_text(tx(lang,"ex_translate"),parse_mode="Markdown"); return
+    if not text:
+        await update.message.reply_text(tx(lang,"ex_translate"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"translating"),parse_mode="Markdown")
     try:
-        reply = await ai_once(f"Translate accurately: {text}")
+        reply = await ai_once(f"Translate the following text accurately, keeping the meaning and tone:\n{text}")
         await update.message.reply_text(f"🌐 {reply}")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def code_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1180,12 +1288,16 @@ async def code_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not check_limit(user.id,"code",limits["code"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     text = " ".join(ctx.args)
-    if not text: await update.message.reply_text(tx(lang,"ex_code"),parse_mode="Markdown"); return
+    if not text:
+        await update.message.reply_text(tx(lang,"ex_code"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"writing_code"),parse_mode="Markdown")
     try:
-        reply = await ai_once(f"Write clean, well-commented code for: {text}\nExplain how it works.")
+        reply = await ai_once(
+            f"Write clean, well-commented, production-ready code for: {text}\n"
+            f"Include explanation of how it works.")
         await update.message.reply_text(f"💻 {reply}")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def document_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1195,16 +1307,21 @@ async def document_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["document"] == 0:
         kb = [[InlineKeyboardButton(tx(lang,"btn_ustd"),callback_data="card_std")]]
-        await update.message.reply_text(tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     if not check_limit(user.id,"document",limits["document"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     text = " ".join(ctx.args)
-    if not text: await update.message.reply_text(tx(lang,"ex_document"),parse_mode="Markdown"); return
+    if not text:
+        await update.message.reply_text(tx(lang,"ex_document"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"writing_doc"),parse_mode="Markdown")
     try:
-        reply = await ai_once(f"Create professional document: {text}\nFormat properly. Same language.")
+        reply = await ai_once(
+            f"Create a professional, complete document for: {text}\n"
+            f"Format it properly with all necessary sections. Use same language as the request.")
         await update.message.reply_text(f"📋 {reply}")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def ai_sound_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1214,18 +1331,21 @@ async def ai_sound_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["tts"] == 0:
         kb = [[InlineKeyboardButton(tx(lang,"btn_ustd"),callback_data="card_std")]]
-        await update.message.reply_text(tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     if not check_limit(user.id,"tts",limits["tts"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     text = " ".join(ctx.args)
-    if not text: await update.message.reply_text(tx(lang,"ex_voice"),parse_mode="Markdown"); return
+    if not text:
+        await update.message.reply_text(tx(lang,"ex_voice"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"gen_voice"),parse_mode="Markdown")
     try:
         tts_lang = detect_gtts(text)
         tts = gTTS(text=text, lang=tts_lang)
         buf = io.BytesIO(); tts.write_to_fp(buf); buf.seek(0)
         await update.message.reply_voice(voice=buf)
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def pptx_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1235,23 +1355,30 @@ async def pptx_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["pptx"] == 0:
         kb = [[InlineKeyboardButton(tx(lang,"btn_uprm"),callback_data="card_prm")]]
-        await update.message.reply_text(tx(lang,"locked_prm"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"locked_prm"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     topic = " ".join(ctx.args)
-    if not topic: await update.message.reply_text(tx(lang,"ex_pptx"),parse_mode="Markdown"); return
+    if not topic:
+        await update.message.reply_text(tx(lang,"ex_pptx"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"creating_pptx",tp=topic),parse_mode="Markdown")
     try:
         raw = await ai_once(
-            f"Create presentation for: '{topic}'. Reply ONLY valid JSON:\n"
-            f'{{\"title\":\"...\", \"slides\":[{{\"title\":\"...\", \"points\":[\"...\",\"...\",\"...\"]}}]}}\n'
-            f"Min 6 slides. Same language as topic.")
+            f"Create a presentation about: '{topic}'.\n"
+            f"Reply with ONLY valid JSON, nothing else:\n"
+            f'{{"title":"presentation title","slides":[{{"title":"slide title","points":["point 1","point 2","point 3"]}}]}}\n'
+            f"Create minimum 6 slides. Use the same language as the topic.")
         raw = raw.strip()
-        if "```" in raw: raw = raw.split("```")[1]; raw = raw[4:] if raw.startswith("json") else raw
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"): raw = raw[4:]
         data = json.loads(raw)
         path = make_pptx(data["title"], data["slides"])
         with open(path, "rb") as f:
-            await update.message.reply_document(f, filename=f"{topic}.pptx", caption=tx(lang,"ready"))
+            await update.message.reply_document(
+                f, filename=f"{topic}.pptx", caption=tx(lang,"ready"))
         os.remove(path)
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def word_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1261,23 +1388,30 @@ async def word_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["word"] == 0:
         kb = [[InlineKeyboardButton(tx(lang,"btn_uprm"),callback_data="card_prm")]]
-        await update.message.reply_text(tx(lang,"locked_prm"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"locked_prm"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     topic = " ".join(ctx.args)
-    if not topic: await update.message.reply_text(tx(lang,"ex_word"),parse_mode="Markdown"); return
+    if not topic:
+        await update.message.reply_text(tx(lang,"ex_word"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"creating_word",tp=topic),parse_mode="Markdown")
     try:
         raw = await ai_once(
-            f"Create Word document for: '{topic}'. Reply ONLY valid JSON:\n"
-            f'{{\"title\":\"...\", \"sections\":[{{\"title\":\"...\", \"points\":[\"...\",\"...\",\"...\"]}}]}}\n'
-            f"Min 5 sections. Same language as topic.")
+            f"Create a Word document about: '{topic}'.\n"
+            f"Reply with ONLY valid JSON, nothing else:\n"
+            f'{{"title":"document title","sections":[{{"title":"section title","points":["point 1","point 2","point 3"]}}]}}\n'
+            f"Create minimum 5 sections. Use same language as topic.")
         raw = raw.strip()
-        if "```" in raw: raw = raw.split("```")[1]; raw = raw[4:] if raw.startswith("json") else raw
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"): raw = raw[4:]
         data = json.loads(raw)
         path = make_docx(data["title"], data["sections"])
         with open(path, "rb") as f:
-            await update.message.reply_document(f, filename=f"{topic}.docx", caption=tx(lang,"ready"))
+            await update.message.reply_document(
+                f, filename=f"{topic}.docx", caption=tx(lang,"ready"))
         os.remove(path)
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def cv_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1287,16 +1421,22 @@ async def cv_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["cv"] == 0:
         kb = [[InlineKeyboardButton(tx(lang,"btn_ustd"),callback_data="card_std")]]
-        await update.message.reply_text(tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     if not check_limit(user.id,"cv",limits["cv"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     info = " ".join(ctx.args)
-    if not info: await update.message.reply_text(tx(lang,"ex_cv"),parse_mode="Markdown"); return
+    if not info:
+        await update.message.reply_text(tx(lang,"ex_cv"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"writing_cv"),parse_mode="Markdown")
     try:
-        reply = await ai_once(f"Write professional ATS-friendly CV for: {info}\nSections: Summary, Experience, Skills, Education, Achievements.")
+        reply = await ai_once(
+            f"Write a professional, ATS-friendly CV/Resume for: {info}\n"
+            f"Include: Professional Summary, Work Experience, Technical Skills, "
+            f"Education, Key Achievements. Make it impressive and detailed.")
         await update.message.reply_text(f"👤 *CV:*\n\n{reply}", parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def email_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1306,16 +1446,22 @@ async def email_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["email"] == 0:
         kb = [[InlineKeyboardButton(tx(lang,"btn_ustd"),callback_data="card_std")]]
-        await update.message.reply_text(tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     if not check_limit(user.id,"email",limits["email"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     topic = " ".join(ctx.args)
-    if not topic: await update.message.reply_text(tx(lang,"ex_email"),parse_mode="Markdown"); return
+    if not topic:
+        await update.message.reply_text(tx(lang,"ex_email"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"writing_email"),parse_mode="Markdown")
     try:
-        reply = await ai_once(f"Write professional email about: {topic}\nSubject, greeting, body, closing. Same language.")
+        reply = await ai_once(
+            f"Write a professional email about: {topic}\n"
+            f"Include: Subject line, proper greeting, clear body, professional closing. "
+            f"Use same language as the request.")
         await update.message.reply_text(f"📧 *Email:*\n\n{reply}", parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def post_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1326,12 +1472,17 @@ async def post_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not check_limit(user.id,"post",limits["post"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     topic = " ".join(ctx.args)
-    if not topic: await update.message.reply_text(tx(lang,"ex_post"),parse_mode="Markdown"); return
+    if not topic:
+        await update.message.reply_text(tx(lang,"ex_post"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"writing_post"),parse_mode="Markdown")
     try:
-        reply = await ai_once(f"Write viral social media post about: {topic}\nHook, content, CTA, hashtags. Same language.")
+        reply = await ai_once(
+            f"Write an engaging, viral social media post about: {topic}\n"
+            f"Include: Strong hook, valuable content, clear call-to-action, relevant hashtags. "
+            f"Use same language as the request.")
         await update.message.reply_text(f"📱 *Post:*\n\n{reply}", parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def biznes_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1342,12 +1493,18 @@ async def biznes_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not check_limit(user.id,"biznes",limits["biznes"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     idea = " ".join(ctx.args)
-    if not idea: await update.message.reply_text(tx(lang,"ex_biznes"),parse_mode="Markdown"); return
+    if not idea:
+        await update.message.reply_text(tx(lang,"ex_biznes"),parse_mode="Markdown"); return
     await update.message.reply_text(tx(lang,"writing_biz"),parse_mode="Markdown")
     try:
-        reply = await ai_once(f"Write comprehensive business plan for: {idea}\nExecutive Summary, Market, Products, Marketing, Financial Plan.")
+        reply = await ai_once(
+            f"Write a comprehensive business plan for: {idea}\n"
+            f"Sections: Executive Summary, Market Analysis, Products/Services, "
+            f"Marketing Strategy, Financial Projections, Competitive Advantage. "
+            f"Be detailed and professional.")
         await update.message.reply_text(f"💼 *Business Plan:*\n\n{reply}", parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def admin_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -1360,17 +1517,23 @@ async def admin_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         c.execute("SELECT COUNT(*) FROM users WHERE is_blocked=TRUE"); blk = c.fetchone()[0]
         c.execute("SELECT SUM(coins) FROM users"); tc = c.fetchone()[0] or 0
         c.execute("SELECT COUNT(*) FROM group_modes"); grps = c.fetchone()[0]
-        conn.close(); rev = std * USDT_STANDARD + prm * USDT_PREMIUM
+        conn.close()
+        rev = std * USDT_STANDARD + prm * USDT_PREMIUM
     except: total=std=prm=blk=tc=grps=rev=0
     await update.message.reply_text(
         f"🔧 *Admin Panel*\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👥 Total: *{total}* | 🚫 Blocked: *{blk}*\n"
+        f"👥 Total users: *{total}*\n"
+        f"🆓 Free: *{total-std-prm}*\n"
         f"⭐ Standard: *{std}* | 💎 Premium: *{prm}*\n"
-        f"👥 Groups: *{grps}* | 💰 Revenue: ~*${rev}*\n"
+        f"🚫 Blocked: *{blk}* | 👥 Groups: *{grps}*\n"
+        f"💰 Est. Revenue: ~*${rev}*\n"
         f"🪙 Total coins: *{tc:,}*\n\n"
-        f"`/users` `/find [@u or id]` `/broadcast [msg]`\n"
-        f"`/createpromo [type] [val] [uses] [code?]`\n"
-        f"`/addcoins [uid] [amount]`\n"
+        f"📋 *Commands:*\n"
+        f"`/users` — All users list\n"
+        f"`/find [@username or id]` — Find & manage user\n"
+        f"`/broadcast [message]` — Message all users\n"
+        f"`/createpromo [type] [val] [uses] [code?]` — Create promo\n"
+        f"`/addcoins [user_id] [amount]` — Add coins\n"
         f"`/maintenance` — Send maintenance alert",
         parse_mode="Markdown")
 
@@ -1379,18 +1542,20 @@ async def maintenance_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Access denied!"); return
     await update.message.reply_text("⏳ Sending maintenance alert to all users...")
     await broadcast_maintenance(ctx.application)
-    await update.message.reply_text("✅ Alert sent!")
+    await update.message.reply_text("✅ Maintenance alert sent to all users!")
 
 async def users_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Access denied!"); return
     try:
         conn = db(); c = conn.cursor()
-        c.execute("SELECT user_id,username,plan,is_blocked FROM users ORDER BY CASE plan WHEN 'premium' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END, joined_at DESC")
+        c.execute("""SELECT user_id,username,plan,is_blocked FROM users
+            ORDER BY CASE plan WHEN 'premium' THEN 1 WHEN 'standard' THEN 2 ELSE 3 END,
+            joined_at DESC""")
         rows = c.fetchall(); conn.close()
         if not rows: await update.message.reply_text("No users."); return
         pem = {"free":"🆓","standard":"⭐","premium":"💎"}
-        text = f"👥 *Users: {len(rows)}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        text = f"👥 *All Users: {len(rows)}*\n━━━━━━━━━━━━━━━━━━━━\n\n"
         for uid, un, plan, blk in rows:
             n = f"@{un}" if un else "no_username"
             b = " 🚫" if blk else ""
@@ -1398,39 +1563,49 @@ async def users_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if len(text) > 4000:
             for p in [text[i:i+4000] for i in range(0, len(text), 4000)]:
                 await update.message.reply_text(p, parse_mode="Markdown")
-        else: await update.message.reply_text(text, parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+        else:
+            await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def find_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Access denied!"); return
-    if not ctx.args: await update.message.reply_text("Usage: /find [id or @username]"); return
+    if not ctx.args:
+        await update.message.reply_text("Usage: /find [id or @username]"); return
     try:
         arg = ctx.args[0]; conn = db(); c = conn.cursor()
         if arg.startswith("@"):
-            c.execute("SELECT plan,expires_at,is_blocked,full_name,username,user_id,coins,total_messages,warning_count FROM users WHERE username=%s",(arg[1:],))
+            c.execute("""SELECT plan,expires_at,is_blocked,full_name,username,
+                user_id,coins,total_messages,warning_count
+                FROM users WHERE username=%s""", (arg[1:],))
         else:
-            c.execute("SELECT plan,expires_at,is_blocked,full_name,username,user_id,coins,total_messages,warning_count FROM users WHERE user_id=%s",(int(arg),))
+            c.execute("""SELECT plan,expires_at,is_blocked,full_name,username,
+                user_id,coins,total_messages,warning_count
+                FROM users WHERE user_id=%s""", (int(arg),))
         row = c.fetchone(); conn.close()
         if not row: await update.message.reply_text(f"❌ Not found: {arg}"); return
-        plan,exp,blk,fn,un,tid,coins,msgs,warns = row
+        plan, exp, blk, fn, un, tid, coins, msgs, warns = row
         pem = {"free":"🆓","standard":"⭐","premium":"💎"}
         exp_s = exp.strftime("%d.%m.%Y") if exp else "—"
         kb = [
-            [InlineKeyboardButton("🆓",callback_data=f"ap_free_{tid}"),
-             InlineKeyboardButton("⭐",callback_data=f"ap_std_{tid}"),
-             InlineKeyboardButton("💎",callback_data=f"ap_prm_{tid}")],
-            [InlineKeyboardButton("✅ Unblock" if blk else "🚫 Block",
-             callback_data=f"ap_unblock_{tid}" if blk else f"ap_block_{tid}")]
+            [InlineKeyboardButton("🆓 Free",callback_data=f"ap_free_{tid}"),
+             InlineKeyboardButton("⭐ Std",callback_data=f"ap_std_{tid}"),
+             InlineKeyboardButton("💎 Prm",callback_data=f"ap_prm_{tid}")],
+            [InlineKeyboardButton(
+                "✅ Unblock" if blk else "🚫 Block",
+                callback_data=f"ap_unblock_{tid}" if blk else f"ap_block_{tid}")]
         ]
         await update.message.reply_text(
             f"👤 *User Info*\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"🆔 `{tid}`\n👤 {fn or '—'} | @{un or '—'}\n"
-            f"{pem.get(plan,'🆓')} *{plan.upper()}* | 📅 {exp_s}\n"
-            f"🪙 {coins:,} | 💬 {msgs:,} | ⚠️ {warns}\n"
+            f"🆔 ID: `{tid}`\n"
+            f"👤 Name: {fn or '—'} | @{un or '—'}\n"
+            f"{pem.get(plan,'🆓')} Plan: *{plan.upper()}* | 📅 {exp_s}\n"
+            f"🪙 Coins: {coins:,} | 💬 Msgs: {msgs:,} | ⚠️ Warns: {warns}\n"
             f"{'🚫 BLOCKED' if blk else '✅ Active'}",
             reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -1446,17 +1621,21 @@ async def broadcast_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try: await ctx.bot.send_message(chat_id=row[0], text=f"📢 {msg}"); sent += 1
             except: pass
         await update.message.reply_text(f"✅ Sent to *{sent}* users!", parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def addcoins_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Access denied!"); return
-    if len(ctx.args) < 2: await update.message.reply_text("Usage: /addcoins [user_id] [amount]"); return
+    if len(ctx.args) < 2:
+        await update.message.reply_text("Usage: /addcoins [user_id] [amount]"); return
     try:
         uid, amount = int(ctx.args[0]), int(ctx.args[1])
         add_coins(uid, amount)
-        await update.message.reply_text(f"✅ Added *{amount:,}* coins to `{uid}`", parse_mode="Markdown")
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+        await update.message.reply_text(
+            f"✅ Added *{amount:,}* coins to `{uid}`", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def precheckout(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
@@ -1467,12 +1646,14 @@ async def payment_success(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u = get_user(user.id); lang = u["language"]
     if payload == "std_stars":
         set_plan(user.id, "standard", 30)
-        await update.message.reply_text("✅ ⭐ *Standard* 30 days! 🎉", parse_mode="Markdown")
+        await update.message.reply_text("✅ ⭐ *Standard* activated for 30 days! 🎉", parse_mode="Markdown")
     elif payload == "prm_stars":
         set_plan(user.id, "premium", 30)
-        await update.message.reply_text("✅ 💎 *Premium* 30 days! 🎉", parse_mode="Markdown")
+        await update.message.reply_text("✅ 💎 *Premium* activated for 30 days! 🎉", parse_mode="Markdown")
     elif payload == "grp_stars":
-        await update.message.reply_text("✅ *Group purchased!*\nAdd bot → /activate\\_group", parse_mode="Markdown")
+        await update.message.reply_text(
+            "✅ *Group mode purchased!*\n\nNow add me to your group and send /activate\\_group",
+            parse_mode="Markdown")
     elif payload.startswith("img_"):
         prompt = payload[4:]
         await update.message.reply_text(tx(lang,"gen_image"),parse_mode="Markdown")
@@ -1480,7 +1661,8 @@ async def payment_success(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if img:
             buf = io.BytesIO(img); buf.name = "image.png"
             await update.message.reply_photo(photo=buf, caption=f"🎨 {prompt}")
-        else: await update.message.reply_text("❌ Could not generate. Try again.")
+        else:
+            await update.message.reply_text("❌ Could not generate. Try again.")
 
 async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -1494,26 +1676,49 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer(tx(lang,"lang_cooldown"), show_alert=True); return
         set_language(uid, nl)
         flag, name = LANGUAGES.get(nl, ("🌐","Unknown"))
-        await q.message.edit_text(f"✅ Language: *{flag} {name}*", parse_mode="Markdown")
+        await q.message.edit_text(f"✅ Language changed to *{flag} {name}!*", parse_mode="Markdown")
+
+    elif data == "admin_activate_group":
+        # Admin uchun bepul guruh yoqish
+        if uid != ADMIN_ID:
+            await q.answer("❌ Access denied!", show_alert=True); return
+        await q.message.reply_text(
+            "✅ *Admin Group Activation*\n\n"
+            "Add me to your group, then send /activate\\_group in the group.",
+            parse_mode="Markdown")
 
     elif data == "stars_std":
-        await ctx.bot.send_invoice(chat_id=uid, title="⭐ Standard",
-            description="Standard 30 days", payload="std_stars",
-            currency="XTR", prices=[LabeledPrice("Standard", STARS_STANDARD)])
+        await ctx.bot.send_invoice(
+            chat_id=uid, title="⭐ Standard Plan",
+            description="Standard plan for 30 days", payload="std_stars",
+            currency="XTR", prices=[LabeledPrice("Standard 30 days", STARS_STANDARD)])
+
     elif data == "stars_prm":
-        await ctx.bot.send_invoice(chat_id=uid, title="💎 Premium",
-            description="Premium 30 days", payload="prm_stars",
-            currency="XTR", prices=[LabeledPrice("Premium", STARS_PREMIUM)])
+        await ctx.bot.send_invoice(
+            chat_id=uid, title="💎 Premium Plan",
+            description="Premium plan for 30 days", payload="prm_stars",
+            currency="XTR", prices=[LabeledPrice("Premium 30 days", STARS_PREMIUM)])
+
     elif data == "stars_grp":
-        await ctx.bot.send_invoice(chat_id=uid, title="👥 Group Mode",
-            description="Bot for your group", payload="grp_stars",
-            currency="XTR", prices=[LabeledPrice("Group", STARS_GROUP)])
+        # Admin uchun bepul — Stars to'lamasdan yoqiladi
+        if uid == ADMIN_ID:
+            await q.message.reply_text(
+                "👑 *Admin Group Mode*\n\n"
+                "As admin, group mode is FREE for you!\n"
+                "Add bot to your group → send /activate\\_group",
+                parse_mode="Markdown")
+        else:
+            await ctx.bot.send_invoice(
+                chat_id=uid, title="👥 Group Mode",
+                description="Activate bot for your entire group", payload="grp_stars",
+                currency="XTR", prices=[LabeledPrice("Group Mode", STARS_GROUP)])
 
     elif data.startswith("img_pay_"):
         prompt = data[8:]
-        await ctx.bot.send_invoice(chat_id=uid, title="🎨 AI Image",
+        await ctx.bot.send_invoice(
+            chat_id=uid, title="🎨 AI Image",
             description=f"Generate: {prompt}", payload=f"img_{prompt}",
-            currency="XTR", prices=[LabeledPrice("Image", STARS_IMAGINE)])
+            currency="XTR", prices=[LabeledPrice("AI Image", STARS_IMAGINE)])
 
     elif data == "coins_std":
         if u["coins"] >= COINS_STANDARD:
@@ -1522,7 +1727,8 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             conn.commit(); conn.close()
             set_plan(uid, "standard", 30)
             await q.message.edit_text(tx(lang,"coins_ok_std"), parse_mode="Markdown")
-        else: await q.answer(tx(lang,"not_enough",need=COINS_STANDARD-u["coins"]), show_alert=True)
+        else:
+            await q.answer(tx(lang,"not_enough",need=COINS_STANDARD-u["coins"]), show_alert=True)
 
     elif data == "coins_prm":
         if u["coins"] >= COINS_PREMIUM:
@@ -1531,16 +1737,30 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             conn.commit(); conn.close()
             set_plan(uid, "premium", 30)
             await q.message.edit_text(tx(lang,"coins_ok_prm"), parse_mode="Markdown")
-        else: await q.answer(tx(lang,"not_enough",need=COINS_PREMIUM-u["coins"]), show_alert=True)
+        else:
+            await q.answer(tx(lang,"not_enough",need=COINS_PREMIUM-u["coins"]), show_alert=True)
 
     elif data == "card_std":
-        kb = [[InlineKeyboardButton(tx(lang,"btn_contact"), url=f"https://t.me/{ADMIN_USERNAME}")]]
-        await q.message.reply_text(tx(lang,"pay_card",card=CARD_NUMBER,amt=USDT_STANDARD,admin=ADMIN_USERNAME),
-            reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+        # Admin uchun bepul
+        if uid == ADMIN_ID:
+            set_plan(uid, "standard", 36500)  # 100 yil
+            await q.message.reply_text("👑 Admin: Standard activated for free!", parse_mode="Markdown")
+        else:
+            kb = [[InlineKeyboardButton(tx(lang,"btn_contact"), url=f"https://t.me/{ADMIN_USERNAME}")]]
+            await q.message.reply_text(
+                tx(lang,"pay_card",card=CARD_NUMBER,amt=USDT_STANDARD,admin=ADMIN_USERNAME),
+                reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
     elif data == "card_prm":
-        kb = [[InlineKeyboardButton(tx(lang,"btn_contact"), url=f"https://t.me/{ADMIN_USERNAME}")]]
-        await q.message.reply_text(tx(lang,"pay_card",card=CARD_NUMBER,amt=USDT_PREMIUM,admin=ADMIN_USERNAME),
-            reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+        # Admin uchun bepul
+        if uid == ADMIN_ID:
+            set_plan(uid, "premium", 36500)  # 100 yil
+            await q.message.reply_text("👑 Admin: Premium activated for free!", parse_mode="Markdown")
+        else:
+            kb = [[InlineKeyboardButton(tx(lang,"btn_contact"), url=f"https://t.me/{ADMIN_USERNAME}")]]
+            await q.message.reply_text(
+                tx(lang,"pay_card",card=CARD_NUMBER,amt=USDT_PREMIUM,admin=ADMIN_USERNAME),
+                reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
     elif data == "claim_std":
         if u["referral_count"] >= 10 and not u["claimed_standard"]:
@@ -1549,7 +1769,8 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             c.execute("UPDATE users SET claimed_standard=TRUE WHERE user_id=%s", (uid,))
             conn.commit(); conn.close()
             await q.message.edit_text(tx(lang,"claimed_std"), parse_mode="Markdown")
-        else: await q.answer(tx(lang,"claim_err"), show_alert=True)
+        else:
+            await q.answer(tx(lang,"claim_err"), show_alert=True)
 
     elif data == "claim_prm":
         if u["referral_count"] >= 30 and not u["claimed_premium"]:
@@ -1558,7 +1779,8 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             c.execute("UPDATE users SET claimed_premium=TRUE WHERE user_id=%s", (uid,))
             conn.commit(); conn.close()
             await q.message.edit_text(tx(lang,"claimed_prm"), parse_mode="Markdown")
-        else: await q.answer(tx(lang,"claim_err"), show_alert=True)
+        else:
+            await q.answer(tx(lang,"claim_err"), show_alert=True)
 
     elif data.startswith("ap_free_") or data.startswith("ap_std_") or data.startswith("ap_prm_"):
         parts = data.split("_")
@@ -1567,22 +1789,28 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         plan = pm[plan_key]; days = 30 if plan != "free" else None
         set_plan(tid, plan, days)
         pem = {"free":"🆓","standard":"⭐","premium":"💎"}
-        await q.message.edit_text(f"✅ `{tid}` → {pem[plan]} *{plan.upper()}*", parse_mode="Markdown")
-        try: await ctx.bot.send_message(tid, f"{pem[plan]} Plan: *{plan.upper()}*!", parse_mode="Markdown")
+        await q.message.edit_text(
+            f"✅ User `{tid}` → {pem[plan]} *{plan.upper()}*", parse_mode="Markdown")
+        try:
+            await ctx.bot.send_message(
+                tid, f"{pem[plan]} Your plan updated to *{plan.upper()}*!",
+                parse_mode="Markdown")
         except: pass
 
     elif data.startswith("ap_block_"):
         tid = int(data.split("_")[2]); set_blocked(tid, True)
-        await q.message.edit_text(f"🚫 `{tid}` blocked!", parse_mode="Markdown")
+        await q.message.edit_text(f"🚫 User `{tid}` blocked!", parse_mode="Markdown")
+
     elif data.startswith("ap_unblock_"):
         tid = int(data.split("_")[2]); set_blocked(tid, False)
-        await q.message.edit_text(f"✅ `{tid}` unblocked!", parse_mode="Markdown")
+        await q.message.edit_text(f"✅ User `{tid}` unblocked!", parse_mode="Markdown")
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     text = update.message.text or ""
 
+    # Guruh chati
     if chat.type in ["group", "supergroup"]:
         if not text.lower().startswith("bot "): return
         if not is_group_active(chat.id): return
@@ -1592,14 +1820,17 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await ctx.bot.send_chat_action(chat_id=chat.id, action="typing")
             reply = await ai_chat(user.id, question)
             await update.message.reply_text(reply)
-        except Exception as e: await update.message.reply_text(f"Error: {e}")
+        except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
         return
 
+    # Shaxsiy chat
     ensure_user(user.id, user.username, user.full_name)
     u = get_user(user.id); lang = u["language"]
 
     if u["is_blocked"]:
-        await update.message.reply_text(tx(lang,"blocked",admin=ADMIN_USERNAME),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"blocked",admin=ADMIN_USERNAME), parse_mode="Markdown"); return
 
     if is_bad(text):
         wc = add_warning(user.id)
@@ -1607,20 +1838,24 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             set_blocked(user.id, True)
             await update.message.reply_text(tx(lang,"banned"),parse_mode="Markdown")
         else:
-            await update.message.reply_text(tx(lang,"warning",c=wc,m=MAX_WARNINGS),parse_mode="Markdown")
+            await update.message.reply_text(
+                tx(lang,"warning",c=wc,m=MAX_WARNINGS), parse_mode="Markdown")
         return
 
     limits = get_limits(u["plan"], u["is_admin"])
     if not u["is_admin"] and not check_limit(user.id,"chat",limits["chat"]):
         kb = [[InlineKeyboardButton(tx(lang,"btn_ustd"),callback_data="card_std")]]
-        await update.message.reply_text(tx(lang,"limit_reached"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"limit_reached"),
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode="Markdown"); return
 
     total = inc_msg(user.id, u["is_admin"])
     if total == 100000 and not u["achievement_100k"] and not u["is_admin"]:
         set_plan(user.id, "standard", 5)
         try:
             conn = db(); c = conn.cursor()
-            c.execute("UPDATE users SET achievement_100k=TRUE WHERE user_id=%s",(user.id,))
+            c.execute("UPDATE users SET achievement_100k=TRUE WHERE user_id=%s", (user.id,))
             conn.commit(); conn.close()
         except: pass
         await update.message.reply_text(tx(lang,"achievement"),parse_mode="Markdown")
@@ -1630,7 +1865,8 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply = await ai_chat(user.id, text, do_search=True, limits=limits)
         await update.message.reply_text(reply)
         await update_mem(user.id, text, reply)
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1640,21 +1876,26 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["voice"] == 0:
         kb = [[InlineKeyboardButton(tx(lang,"btn_uprm"),callback_data="card_prm")]]
-        await update.message.reply_text(tx(lang,"locked_prm"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"locked_prm"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
         f = await ctx.bot.get_file(update.message.voice.file_id)
         data = requests.get(f.file_path).content
         with open("v.ogg","wb") as fp: fp.write(data)
         with open("v.ogg","rb") as fp:
-            tr = ai.audio.transcriptions.create(file=("v.ogg", fp.read()), model="whisper-1")
+            tr = ai.audio.transcriptions.create(
+                file=("v.ogg", fp.read()),
+                model="whisper-large-v3")
         text = tr.text
-        await update.message.reply_text(tx(lang,"you_said") + text, parse_mode="Markdown")
+        await update.message.reply_text(
+            tx(lang,"you_said") + text, parse_mode="Markdown")
         reply = await ai_chat(user.id, text)
         await update.message.reply_text(reply)
         try: os.remove("v.ogg")
         except: pass
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1664,23 +1905,24 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if not u["is_admin"] and not check_limit(user.id,"image",limits["image"]):
         kb = [[InlineKeyboardButton(tx(lang,"btn_ustd"),callback_data="card_std")]]
-        await update.message.reply_text(tx(lang,"limit_reached"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"limit_reached"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     try:
         photo = update.message.photo[-1]
         f = await ctx.bot.get_file(photo.file_id)
         img_data = requests.get(f.file_path).content
-        import base64
         b64 = base64.b64encode(img_data).decode()
-        caption = update.message.caption or "Describe this image in detail."
+        caption = update.message.caption or "Describe this image in detail. What do you see?"
         r = ai.chat.completions.create(
-            model="gpt-4o",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[{"role":"user","content":[
                 {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{b64}"}},
                 {"type":"text","text":caption}
             ]}])
         await update.message.reply_text(r.choices[0].message.content)
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1690,7 +1932,8 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     limits = get_limits(u["plan"], u["is_admin"])
     if limits["pdf"] == 0:
         kb = [[InlineKeyboardButton(tx(lang,"btn_ustd"),callback_data="card_std")]]
-        await update.message.reply_text(tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
+        await update.message.reply_text(
+            tx(lang,"locked_std"),reply_markup=InlineKeyboardMarkup(kb),parse_mode="Markdown"); return
     if not u["is_admin"] and not check_limit(user.id,"pdf",limits["pdf"]):
         await update.message.reply_text(tx(lang,"limit_reached"),parse_mode="Markdown"); return
     doc = update.message.document
@@ -1707,44 +1950,47 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try: os.remove("tmp.pdf")
         except: pass
         if len(text) > 12000: text = text[:12000] + "..."
-        caption = update.message.caption or "Summarize comprehensively and explain key points."
-        reply = await ai_chat(user.id, f"PDF:\n\n{text}\n\nRequest: {caption}", do_search=False)
+        caption = update.message.caption or "Summarize this document comprehensively and explain all key points."
+        reply = await ai_chat(user.id, f"PDF Content:\n\n{text}\n\nRequest: {caption}", do_search=False)
         await update.message.reply_text(reply)
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 async def post_init(app):
     init_db()
     await app.bot.set_my_commands([
         BotCommand("start","🚀 Start"),
         BotCommand("updateplan","💰 Plans & pricing"),
-        BotCommand("weather","🌦 Weather"),
+        BotCommand("weather","🌦 Weather forecast"),
         BotCommand("crypto","💰 Crypto prices"),
-        BotCommand("news","📰 News"),
+        BotCommand("news","📰 Latest news"),
         BotCommand("imagine","🎨 AI Image (Premium)"),
         BotCommand("pptx","📊 PowerPoint (Premium)"),
-        BotCommand("word","📝 Word (Premium)"),
-        BotCommand("cv","👤 CV (Standard+)"),
-        BotCommand("email","📧 Email (Standard+)"),
-        BotCommand("document","📋 Document (Standard+)"),
+        BotCommand("word","📝 Word document (Premium)"),
+        BotCommand("cv","👤 Write CV (Standard+)"),
+        BotCommand("email","📧 Write email (Standard+)"),
+        BotCommand("document","📋 Create document (Standard+)"),
         BotCommand("ai_sound","🔊 AI Voice (Standard+)"),
-        BotCommand("translate","🌐 Translate"),
-        BotCommand("code","💻 Code writer"),
+        BotCommand("translate","🌐 Translate text"),
+        BotCommand("code","💻 Write code"),
         BotCommand("post","📱 Marketing post"),
         BotCommand("biznes","💼 Business plan"),
         BotCommand("coins","🪙 My coins"),
         BotCommand("referral","👥 Invite & earn"),
-        BotCommand("affiliate","🤝 Affiliate"),
+        BotCommand("affiliate","🤝 Affiliate program"),
         BotCommand("gift","🎁 Daily bonus"),
         BotCommand("top","🏆 Top users"),
-        BotCommand("stats","📊 Statistics"),
+        BotCommand("stats","📊 My statistics"),
         BotCommand("promo","🎟️ Promo code"),
-        BotCommand("language","🌐 Language"),
+        BotCommand("language","🌐 Change language"),
         BotCommand("reset","🗑️ Clear history"),
         BotCommand("help","❓ Help"),
     ])
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+
+    # User commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("reset", reset_cmd))
@@ -1773,6 +2019,8 @@ def main():
     app.add_handler(CommandHandler("promo", promo_cmd))
     app.add_handler(CommandHandler("group", group_cmd))
     app.add_handler(CommandHandler("activate_group", activate_group_cmd))
+
+    # Admin commands
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("maintenance", maintenance_cmd))
     app.add_handler(CommandHandler("users", users_cmd))
@@ -1780,13 +2028,18 @@ def main():
     app.add_handler(CommandHandler("broadcast", broadcast_cmd))
     app.add_handler(CommandHandler("createpromo", createpromo_cmd))
     app.add_handler(CommandHandler("addcoins", addcoins_cmd))
+
+    # Payments
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, payment_success))
+
+    # Callbacks & messages
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+
     print(f"🚀 {BOT_NAME} is running!")
     app.run_polling()
 
