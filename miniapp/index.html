@@ -1,1 +1,1415 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Emerland AI</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{
+--bg:#0a0a0f;
+--bg2:#12121a;
+--bg3:#1a1a26;
+--card:#1e1e2e;
+--card2:#252535;
+--border:#2a2a3e;
+--primary:#7c3aed;
+--primary2:#6d28d9;
+--primary3:#8b5cf6;
+--accent:#06b6d4;
+--accent2:#0891b2;
+--green:#10b981;
+--red:#ef4444;
+--yellow:#f59e0b;
+--text:#e2e8f0;
+--text2:#94a3b8;
+--text3:#64748b;
+--shadow:0 4px 24px rgba(0,0,0,0.4);
+--radius:16px;
+--radius2:12px;
+--radius3:8px;
+}
+html,body{height:100%;overflow:hidden}
+body{
+background:var(--bg);
+color:var(--text);
+font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+font-size:15px;
+line-height:1.5;
+}
 
+/* SCROLLBAR */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* APP LAYOUT */
+#app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* HEADER */
+.header{
+background:linear-gradient(135deg,var(--bg2) 0%,var(--bg3) 100%);
+border-bottom:1px solid var(--border);
+padding:12px 16px;
+display:flex;
+align-items:center;
+justify-content:space-between;
+flex-shrink:0;
+}
+.header-left{display:flex;align-items:center;gap:10px}
+.logo{
+width:36px;height:36px;
+background:linear-gradient(135deg,var(--primary),var(--accent));
+border-radius:10px;
+display:flex;align-items:center;justify-content:center;
+font-size:18px;
+box-shadow:0 2px 12px rgba(124,58,237,0.4);
+}
+.header-title{font-size:17px;font-weight:700;color:var(--text)}
+.header-sub{font-size:11px;color:var(--text2)}
+.header-right{display:flex;gap:8px}
+.icon-btn{
+width:34px;height:34px;
+background:var(--card);
+border:1px solid var(--border);
+border-radius:10px;
+display:flex;align-items:center;justify-content:center;
+cursor:pointer;
+font-size:16px;
+transition:all 0.2s;
+}
+.icon-btn:active{transform:scale(0.9);background:var(--card2)}
+
+/* NAVIGATION */
+.nav{
+display:flex;
+background:var(--bg2);
+border-top:1px solid var(--border);
+padding:6px 8px calc(6px + env(safe-area-inset-bottom));
+flex-shrink:0;
+}
+.nav-item{
+flex:1;
+display:flex;flex-direction:column;align-items:center;
+gap:3px;padding:6px 4px;
+border-radius:10px;
+cursor:pointer;
+transition:all 0.2s;
+color:var(--text3);
+}
+.nav-item.active{color:var(--primary3);background:rgba(124,58,237,0.1)}
+.nav-item:active{transform:scale(0.95)}
+.nav-icon{font-size:20px;line-height:1}
+.nav-label{font-size:10px;font-weight:500}
+
+/* PAGES */
+.pages{flex:1;overflow:hidden;position:relative}
+.page{
+position:absolute;inset:0;
+overflow-y:auto;
+display:none;
+padding:12px;
+gap:12px;
+flex-direction:column;
+}
+.page.active{display:flex}
+
+/* CARDS */
+.card{
+background:var(--card);
+border:1px solid var(--border);
+border-radius:var(--radius);
+padding:16px;
+}
+.card-title{
+font-size:13px;font-weight:600;
+color:var(--text2);
+text-transform:uppercase;
+letter-spacing:0.5px;
+margin-bottom:12px;
+}
+
+/* PROFILE PAGE */
+.profile-header{
+background:linear-gradient(135deg,var(--primary) 0%,var(--accent) 100%);
+border-radius:var(--radius);
+padding:20px;
+display:flex;flex-direction:column;align-items:center;
+gap:10px;
+position:relative;
+overflow:hidden;
+}
+.profile-header::before{
+content:'✦';
+position:absolute;right:-10px;top:-10px;
+font-size:80px;opacity:0.08;
+}
+.avatar{
+width:64px;height:64px;
+background:rgba(255,255,255,0.2);
+border-radius:20px;
+display:flex;align-items:center;justify-content:center;
+font-size:32px;
+border:2px solid rgba(255,255,255,0.3);
+}
+.profile-name{font-size:18px;font-weight:700;color:#fff}
+.plan-badge{
+background:rgba(255,255,255,0.2);
+border:1px solid rgba(255,255,255,0.3);
+border-radius:20px;
+padding:4px 12px;
+font-size:12px;font-weight:600;color:#fff;
+}
+.stats-grid{
+display:grid;grid-template-columns:1fr 1fr;gap:10px;
+}
+.stat-card{
+background:var(--card2);
+border:1px solid var(--border);
+border-radius:var(--radius2);
+padding:14px;
+}
+.stat-val{font-size:20px;font-weight:700;color:var(--text)}
+.stat-label{font-size:11px;color:var(--text2);margin-top:2px}
+.stat-icon{font-size:20px;margin-bottom:4px}
+
+/* PROGRESS BAR */
+.progress-wrap{margin-top:6px}
+.progress-top{display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:4px}
+.progress-bar{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.progress-fill{height:100%;border-radius:3px;transition:width 0.5s ease}
+.progress-purple{background:linear-gradient(90deg,var(--primary),var(--primary3))}
+.progress-cyan{background:linear-gradient(90deg,var(--accent2),var(--accent))}
+.progress-green{background:linear-gradient(90deg,#059669,var(--green))}
+
+/* PLAN CARDS */
+.plan-card{
+border:1px solid var(--border);
+border-radius:var(--radius2);
+padding:14px;
+cursor:pointer;
+transition:all 0.2s;
+position:relative;
+overflow:hidden;
+}
+.plan-card.recommended{border-color:var(--primary);background:rgba(124,58,237,0.05)}
+.plan-card:active{transform:scale(0.98)}
+.plan-badge-rec{
+position:absolute;top:10px;right:10px;
+background:var(--primary);
+color:#fff;font-size:10px;font-weight:600;
+padding:2px 8px;border-radius:10px;
+}
+.plan-name{font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px}
+.plan-price{font-size:13px;color:var(--text2);margin-bottom:10px}
+.plan-features{display:flex;flex-direction:column;gap:4px}
+.plan-feature{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px}
+.plan-feature::before{content:"✓";color:var(--green);font-weight:700;font-size:11px}
+.plan-btn{
+width:100%;margin-top:12px;
+padding:10px;
+background:linear-gradient(135deg,var(--primary),var(--primary2));
+border:none;border-radius:var(--radius3);
+color:#fff;font-size:13px;font-weight:600;
+cursor:pointer;
+transition:all 0.2s;
+}
+.plan-btn:active{transform:scale(0.97);opacity:0.9}
+.plan-btn.outline{
+background:transparent;
+border:1px solid var(--border);
+color:var(--text2);
+}
+
+/* CHAT PAGE */
+#chat-page{padding:0;gap:0}
+.chat-header{
+background:var(--bg2);
+border-bottom:1px solid var(--border);
+padding:10px 16px;
+display:flex;align-items:center;gap:10px;
+flex-shrink:0;
+}
+.chat-model-selector{
+display:flex;align-items:center;gap:6px;
+background:var(--card);
+border:1px solid var(--border);
+border-radius:20px;
+padding:5px 10px;
+cursor:pointer;
+flex:1;
+}
+.model-dot{
+width:8px;height:8px;
+border-radius:50%;
+background:var(--green);
+box-shadow:0 0 6px var(--green);
+}
+.model-name{font-size:12px;font-weight:600;color:var(--text)}
+.model-arrow{font-size:10px;color:var(--text3);margin-left:auto}
+.new-chat-btn{
+background:var(--card);
+border:1px solid var(--border);
+border-radius:20px;
+padding:6px 12px;
+color:var(--text2);
+font-size:12px;
+cursor:pointer;
+transition:all 0.2s;
+white-space:nowrap;
+}
+.new-chat-btn:active{background:var(--card2)}
+
+.messages{
+flex:1;
+overflow-y:auto;
+padding:12px;
+display:flex;flex-direction:column;gap:10px;
+}
+.message{
+max-width:85%;
+padding:10px 14px;
+border-radius:14px;
+font-size:14px;
+line-height:1.5;
+animation:fadeIn 0.2s ease;
+}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.message.user{
+background:linear-gradient(135deg,var(--primary),var(--primary2));
+color:#fff;
+align-self:flex-end;
+border-bottom-right-radius:4px;
+}
+.message.ai{
+background:var(--card);
+border:1px solid var(--border);
+color:var(--text);
+align-self:flex-start;
+border-bottom-left-radius:4px;
+}
+.message.ai .msg-header{
+display:flex;align-items:center;gap:6px;
+margin-bottom:6px;
+}
+.ai-avatar{
+width:20px;height:20px;
+background:linear-gradient(135deg,var(--primary),var(--accent));
+border-radius:6px;
+display:flex;align-items:center;justify-content:center;
+font-size:11px;
+}
+.ai-name{font-size:11px;font-weight:600;color:var(--primary3)}
+.typing-indicator{
+display:flex;align-items:center;gap:4px;
+padding:10px 14px;
+background:var(--card);
+border:1px solid var(--border);
+border-radius:14px;border-bottom-left-radius:4px;
+align-self:flex-start;
+}
+.typing-dot{
+width:6px;height:6px;
+background:var(--text2);
+border-radius:50%;
+animation:typing 1.4s infinite;
+}
+.typing-dot:nth-child(2){animation-delay:0.2s}
+.typing-dot:nth-child(3){animation-delay:0.4s}
+@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:0.4}30%{transform:translateY(-6px);opacity:1}}
+
+.chat-input-wrap{
+background:var(--bg2);
+border-top:1px solid var(--border);
+padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+flex-shrink:0;
+}
+.input-tools{
+display:flex;gap:6px;margin-bottom:8px;
+overflow-x:auto;padding-bottom:2px;
+}
+.input-tools::-webkit-scrollbar{display:none}
+.tool-chip{
+display:flex;align-items:center;gap:4px;
+background:var(--card);
+border:1px solid var(--border);
+border-radius:16px;
+padding:5px 10px;
+font-size:11px;color:var(--text2);
+white-space:nowrap;
+cursor:pointer;
+transition:all 0.2s;
+flex-shrink:0;
+}
+.tool-chip:active{background:rgba(124,58,237,0.2);border-color:var(--primary);color:var(--primary3)}
+.tool-chip.active{background:rgba(124,58,237,0.15);border-color:var(--primary);color:var(--primary3)}
+.input-row{display:flex;align-items:flex-end;gap:8px}
+.input-box{
+flex:1;
+background:var(--card);
+border:1px solid var(--border);
+border-radius:14px;
+padding:10px 14px;
+color:var(--text);
+font-size:14px;
+font-family:inherit;
+resize:none;
+max-height:120px;
+outline:none;
+transition:border-color 0.2s;
+line-height:1.4;
+}
+.input-box:focus{border-color:var(--primary)}
+.input-box::placeholder{color:var(--text3)}
+.send-btn{
+width:40px;height:40px;
+background:linear-gradient(135deg,var(--primary),var(--primary2));
+border:none;border-radius:12px;
+display:flex;align-items:center;justify-content:center;
+cursor:pointer;
+transition:all 0.2s;
+flex-shrink:0;
+box-shadow:0 2px 12px rgba(124,58,237,0.4);
+}
+.send-btn:active{transform:scale(0.9)}
+.send-btn svg{width:18px;height:18px;fill:none;stroke:#fff;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.send-btn:disabled{opacity:0.4;cursor:not-allowed}
+
+/* WELCOME MSG */
+.welcome-msg{
+display:flex;flex-direction:column;align-items:center;
+justify-content:center;flex:1;
+text-align:center;padding:24px;
+gap:12px;
+}
+.welcome-icon{
+width:56px;height:56px;
+background:linear-gradient(135deg,var(--primary),var(--accent));
+border-radius:18px;
+display:flex;align-items:center;justify-content:center;
+font-size:28px;
+margin-bottom:4px;
+}
+.welcome-title{font-size:18px;font-weight:700;color:var(--text)}
+.welcome-sub{font-size:13px;color:var(--text2);max-width:260px}
+.suggestions{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:8px}
+.suggestion{
+background:var(--card);
+border:1px solid var(--border);
+border-radius:12px;
+padding:10px 14px;
+text-align:left;
+font-size:13px;color:var(--text2);
+cursor:pointer;
+transition:all 0.2s;
+display:flex;align-items:center;gap:8px;
+}
+.suggestion:active{background:rgba(124,58,237,0.1);border-color:var(--primary);color:var(--text)}
+
+/* MODEL MODAL */
+.modal-overlay{
+position:fixed;inset:0;
+background:rgba(0,0,0,0.7);
+backdrop-filter:blur(4px);
+display:none;
+z-index:100;
+align-items:flex-end;
+}
+.modal-overlay.show{display:flex}
+.modal{
+background:var(--bg2);
+border:1px solid var(--border);
+border-radius:20px 20px 0 0;
+padding:20px;
+width:100%;
+max-height:70vh;
+overflow-y:auto;
+}
+.modal-title{font-size:16px;font-weight:700;margin-bottom:16px;color:var(--text)}
+.modal-item{
+display:flex;align-items:center;gap:12px;
+padding:12px;
+border-radius:12px;
+cursor:pointer;
+transition:all 0.2s;
+margin-bottom:4px;
+}
+.modal-item:active{background:var(--card)}
+.modal-item.selected{background:rgba(124,58,237,0.1);border:1px solid rgba(124,58,237,0.3)}
+.modal-icon{
+width:40px;height:40px;
+border-radius:12px;
+display:flex;align-items:center;justify-content:center;
+font-size:20px;
+flex-shrink:0;
+}
+.modal-info{flex:1}
+.modal-name{font-size:14px;font-weight:600;color:var(--text)}
+.modal-desc{font-size:11px;color:var(--text2);margin-top:1px}
+.modal-badge{
+font-size:10px;font-weight:600;
+padding:2px 8px;border-radius:10px;
+}
+.badge-free{background:rgba(16,185,129,0.15);color:var(--green)}
+.badge-pro{background:rgba(124,58,237,0.15);color:var(--primary3)}
+.modal-check{font-size:18px;color:var(--primary3)}
+
+/* SETTINGS PAGE */
+.settings-item{
+display:flex;align-items:center;gap:12px;
+padding:14px;
+background:var(--card);
+border:1px solid var(--border);
+border-radius:var(--radius2);
+cursor:pointer;
+transition:all 0.2s;
+margin-bottom:6px;
+}
+.settings-item:active{background:var(--card2)}
+.settings-icon{
+width:36px;height:36px;
+border-radius:10px;
+display:flex;align-items:center;justify-content:center;
+font-size:18px;
+}
+.settings-text{flex:1}
+.settings-label{font-size:14px;font-weight:500;color:var(--text)}
+.settings-sub{font-size:11px;color:var(--text2)}
+.settings-arrow{color:var(--text3);font-size:16px}
+.toggle{
+width:44px;height:24px;
+background:var(--border);
+border-radius:12px;
+position:relative;
+transition:all 0.3s;
+cursor:pointer;
+}
+.toggle.on{background:var(--primary)}
+.toggle::after{
+content:'';
+position:absolute;
+width:18px;height:18px;
+background:#fff;
+border-radius:50%;
+top:3px;left:3px;
+transition:all 0.3s;
+}
+.toggle.on::after{transform:translateX(20px)}
+
+/* HISTORY PAGE */
+.history-item{
+background:var(--card);
+border:1px solid var(--border);
+border-radius:var(--radius2);
+padding:14px;
+cursor:pointer;
+transition:all 0.2s;
+}
+.history-item:active{background:var(--card2)}
+.history-title{font-size:14px;font-weight:500;color:var(--text);margin-bottom:4px}
+.history-preview{font-size:12px;color:var(--text2);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.history-date{font-size:11px;color:var(--text3);margin-top:6px}
+.empty-state{
+display:flex;flex-direction:column;align-items:center;
+padding:40px 20px;gap:10px;
+}
+.empty-icon{font-size:40px}
+.empty-text{font-size:14px;color:var(--text2);text-align:center}
+
+/* TOAST */
+.toast{
+position:fixed;bottom:90px;left:50%;transform:translateX(-50%);
+background:var(--card2);
+border:1px solid var(--border);
+border-radius:20px;
+padding:8px 16px;
+font-size:13px;color:var(--text);
+opacity:0;
+transition:opacity 0.3s;
+z-index:200;
+white-space:nowrap;
+}
+.toast.show{opacity:1}
+
+/* SECTION HEADER */
+.section-header{
+display:flex;align-items:center;gap:8px;
+margin-bottom:10px;
+}
+.section-icon{font-size:16px}
+.section-title{font-size:15px;font-weight:700;color:var(--text)}
+
+/* DIVIDER */
+.divider{height:1px;background:var(--border);margin:4px 0}
+
+/* COIN BANNER */
+.coin-banner{
+background:linear-gradient(135deg,#7c3aed 0%,#06b6d4 100%);
+border-radius:var(--radius);
+padding:16px;
+display:flex;align-items:center;gap:12px;
+}
+.coin-icon{font-size:32px}
+.coin-info{flex:1}
+.coin-amount{font-size:20px;font-weight:700;color:#fff}
+.coin-label{font-size:12px;color:rgba(255,255,255,0.7)}
+.earn-btn{
+background:rgba(255,255,255,0.2);
+border:1px solid rgba(255,255,255,0.3);
+border-radius:10px;
+padding:6px 12px;
+color:#fff;font-size:12px;font-weight:600;
+cursor:pointer;
+}
+
+/* FEATURE CHIPS */
+.feature-grid{
+display:grid;grid-template-columns:1fr 1fr;gap:8px;
+}
+.feature-chip{
+background:var(--card2);
+border:1px solid var(--border);
+border-radius:var(--radius2);
+padding:12px;
+display:flex;flex-direction:column;gap:4px;
+cursor:pointer;
+transition:all 0.2s;
+}
+.feature-chip:active{background:rgba(124,58,237,0.1);border-color:var(--primary)}
+.feature-chip-icon{font-size:22px}
+.feature-chip-name{font-size:12px;font-weight:600;color:var(--text)}
+.feature-chip-desc{font-size:10px;color:var(--text2)}
+
+/* REFERRAL */
+.referral-box{
+background:linear-gradient(135deg,rgba(124,58,237,0.1),rgba(6,182,212,0.1));
+border:1px solid rgba(124,58,237,0.3);
+border-radius:var(--radius2);
+padding:14px;
+}
+.ref-link{
+background:var(--bg);
+border:1px solid var(--border);
+border-radius:8px;
+padding:8px 12px;
+font-size:12px;
+color:var(--accent);
+margin-top:8px;
+word-break:break-all;
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <div class="logo">✦</div>
+    <div>
+      <div class="header-title">Emerland AI</div>
+      <div class="header-sub" id="header-plan">Yuklanmoqda...</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="icon-btn" onclick="showToast('⚙️ Sozlamalar')">⚙️</div>
+    <div class="icon-btn" onclick="navTo('profile')">👤</div>
+  </div>
+</div>
+
+<!-- PAGES -->
+<div class="pages">
+
+  <!-- CHAT PAGE -->
+  <div class="page active" id="chat-page">
+    <div class="chat-header">
+      <div class="chat-model-selector" onclick="openModelModal()">
+        <div class="model-dot" id="model-dot"></div>
+        <span class="model-name" id="current-model-name">Llama 3.3 70B</span>
+        <span class="model-arrow">▼</span>
+      </div>
+      <div class="new-chat-btn" onclick="newChat()">+ Yangi</div>
+    </div>
+    <div class="messages" id="messages">
+      <div class="welcome-msg" id="welcome-area">
+        <div class="welcome-icon">✦</div>
+        <div class="welcome-title">Emerland AI</div>
+        <div class="welcome-sub">Professional AI yordamchingiz. Qanday yordam kerak?</div>
+        <div class="suggestions">
+          <div class="suggestion" onclick="sendSuggestion('Menga kod yozib ber: Python bilan saralash algoritmini tushuntir')">
+            💻 Kod yozib ber
+          </div>
+          <div class="suggestion" onclick="sendSuggestion('Sun\'iy intellekt haqida keng ma\'lumot ber')">
+            🤖 AI haqida so'ra
+          </div>
+          <div class="suggestion" onclick="sendSuggestion('Ingliz tilini o\'rganishga yordam ber')">
+            🌐 Til o'rganish
+          </div>
+          <div class="suggestion" onclick="sendSuggestion('Bugungi ish rejamni tuzib ber')">
+            📋 Ish rejasi
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chat-input-wrap">
+      <div class="input-tools" id="input-tools">
+        <div class="tool-chip" onclick="setMode('text')">💬 Matn</div>
+        <div class="tool-chip" onclick="setMode('image')">🎨 Rasm</div>
+        <div class="tool-chip" onclick="setMode('translate')">🌐 Tarjima</div>
+        <div class="tool-chip" onclick="setMode('code')">💻 Kod</div>
+        <div class="tool-chip" onclick="setMode('email')">📧 Email</div>
+        <div class="tool-chip" onclick="setMode('cv')">👤 CV</div>
+      </div>
+      <div class="input-row">
+        <textarea class="input-box" id="msg-input" placeholder="Xabar yozing..." rows="1"
+          onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="send-btn" id="send-btn" onclick="sendMessage()">
+          <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROFILE PAGE -->
+  <div class="page" id="profile-page">
+    <div class="profile-header">
+      <div class="avatar" id="user-avatar">👤</div>
+      <div class="profile-name" id="user-name">Foydalanuvchi</div>
+      <div class="plan-badge" id="user-plan-badge">🆓 BEPUL</div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon">🪙</div>
+        <div class="stat-val" id="stat-coins">0</div>
+        <div class="stat-label">Coinlar</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">💬</div>
+        <div class="stat-val" id="stat-msgs">0</div>
+        <div class="stat-label">Jami xabarlar</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">👥</div>
+        <div class="stat-val" id="stat-refs">0</div>
+        <div class="stat-label">Referallar</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🔥</div>
+        <div class="stat-val" id="stat-streak">0</div>
+        <div class="stat-label">Kun streak</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Bugungi foydalanish</div>
+      <div class="progress-wrap">
+        <div class="progress-top"><span>💬 Suhbat</span><span id="chat-usage">0/20</span></div>
+        <div class="progress-bar"><div class="progress-fill progress-purple" id="chat-bar" style="width:0%"></div></div>
+      </div>
+      <div style="height:10px"></div>
+      <div class="progress-wrap">
+        <div class="progress-top"><span>🌐 Tarjima</span><span id="translate-usage">0/20</span></div>
+        <div class="progress-bar"><div class="progress-fill progress-cyan" id="translate-bar" style="width:0%"></div></div>
+      </div>
+      <div style="height:10px"></div>
+      <div class="progress-wrap">
+        <div class="progress-top"><span>🖼️ Rasm</span><span id="image-usage">0/20</span></div>
+        <div class="progress-bar"><div class="progress-fill progress-green" id="image-bar" style="width:0%"></div></div>
+      </div>
+    </div>
+
+    <div class="coin-banner">
+      <div class="coin-icon">🪙</div>
+      <div class="coin-info">
+        <div class="coin-amount" id="coin-banner-amount">0 coin</div>
+        <div class="coin-label">Har xabar uchun +5 coin</div>
+      </div>
+      <div class="earn-btn" onclick="navTo('plans')">Sarfla</div>
+    </div>
+
+    <div class="referral-box">
+      <div class="section-header">
+        <span class="section-icon">👥</span>
+        <span class="section-title">Referal dasturi</span>
+      </div>
+      <div style="font-size:12px;color:var(--text2)">Do'stlarni taklif qiling va coinlar yig'ing</div>
+      <div class="ref-link" id="ref-link">Yuklanmoqda...</div>
+      <div style="margin-top:10px">
+        <div style="display:flex;gap:8px">
+          <div class="plan-btn" onclick="copyRefLink()" style="margin-top:0;padding:8px;font-size:12px">📋 Nusxa olish</div>
+          <div class="plan-btn outline" onclick="shareRef()" style="margin-top:0;padding:8px;font-size:12px">📤 Ulashish</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PLANS PAGE -->
+  <div class="page" id="plans-page">
+
+    <div class="feature-grid">
+      <div class="feature-chip" onclick="navTo('chat');setMode('image')">
+        <div class="feature-chip-icon">🎨</div>
+        <div class="feature-chip-name">AI Rasm</div>
+        <div class="feature-chip-desc">So'zdan rasm</div>
+      </div>
+      <div class="feature-chip" onclick="navTo('chat');setMode('translate')">
+        <div class="feature-chip-icon">🌐</div>
+        <div class="feature-chip-name">Tarjima</div>
+        <div class="feature-chip-desc">100+ til</div>
+      </div>
+      <div class="feature-chip" onclick="navTo('chat');setMode('cv')">
+        <div class="feature-chip-icon">👤</div>
+        <div class="feature-chip-name">CV Yozish</div>
+        <div class="feature-chip-desc">Professional</div>
+      </div>
+      <div class="feature-chip" onclick="navTo('chat');setMode('email')">
+        <div class="feature-chip-icon">📧</div>
+        <div class="feature-chip-name">Email</div>
+        <div class="feature-chip-desc">Biznes xatlar</div>
+      </div>
+    </div>
+
+    <div class="section-header" style="margin-top:4px">
+      <span class="section-icon">💰</span>
+      <span class="section-title">Tariflar</span>
+    </div>
+
+    <div class="plan-card">
+      <div class="plan-name">🆓 Bepul</div>
+      <div class="plan-price">Har doim bepul</div>
+      <div class="plan-features">
+        <div class="plan-feature">AI Suhbat — 20/kun</div>
+        <div class="plan-feature">Tarjima — 20/kun</div>
+        <div class="plan-feature">Kod yozish — 20/kun</div>
+        <div class="plan-feature">Rasm tahlil — 20/kun</div>
+      </div>
+    </div>
+
+    <div class="plan-card recommended">
+      <div class="plan-badge-rec">⭐ Tavsiya</div>
+      <div class="plan-name">⭐ Standart</div>
+      <div class="plan-price">10$ / 770⭐ / 10,000🪙 oyiga</div>
+      <div class="plan-features">
+        <div class="plan-feature">Hammasi 30/kun</div>
+        <div class="plan-feature">PDF tahlil</div>
+        <div class="plan-feature">CV va Email yozish</div>
+        <div class="plan-feature">AI Ovoz (TTS)</div>
+        <div class="plan-feature">Hujjat yaratish</div>
+      </div>
+      <button class="plan-btn" onclick="buyPlan('standard')">Standart sotib olish</button>
+    </div>
+
+    <div class="plan-card">
+      <div class="plan-name">💎 Premium</div>
+      <div class="plan-price">15$ / 1150⭐ / 100,000🪙 oyiga</div>
+      <div class="plan-features">
+        <div class="plan-feature">Hammasi Cheksiz</div>
+        <div class="plan-feature">AI Rasm yaratish</div>
+        <div class="plan-feature">PowerPoint yaratish</div>
+        <div class="plan-feature">Word hujjat</div>
+        <div class="plan-feature">Ovozli xabarlar</div>
+        <div class="plan-feature">Barcha premium modellar</div>
+      </div>
+      <button class="plan-btn" onclick="buyPlan('premium')" style="background:linear-gradient(135deg,#7c3aed,#06b6d4)">Premium sotib olish</button>
+    </div>
+
+    <div class="plan-card">
+      <div class="plan-name">👥 Guruh Rejimi</div>
+      <div class="plan-price">8547⭐ ($111.11) — bir martalik</div>
+      <div class="plan-features">
+        <div class="plan-feature">Butun guruh uchun</div>
+        <div class="plan-feature">A'zolar "bot ..." deb yozadi</div>
+        <div class="plan-feature">Cheksiz foydalanish</div>
+      </div>
+      <button class="plan-btn outline" onclick="buyPlan('group')">Guruh uchun olish</button>
+    </div>
+
+  </div>
+
+  <!-- HISTORY PAGE -->
+  <div class="page" id="history-page">
+    <div class="section-header">
+      <span class="section-icon">📋</span>
+      <span class="section-title">Suhbat tarixi</span>
+    </div>
+    <div id="history-list">
+      <div class="empty-state">
+        <div class="empty-icon">💬</div>
+        <div class="empty-text">Hali suhbat yo'q.<br>Birinchi suhbatingizni boshlang!</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS PAGE -->
+  <div class="page" id="settings-page">
+    <div class="section-header">
+      <span class="section-icon">⚙️</span>
+      <span class="section-title">Sozlamalar</span>
+    </div>
+
+    <div class="settings-item" onclick="navTo('profile')">
+      <div class="settings-icon" style="background:rgba(124,58,237,0.1)">👤</div>
+      <div class="settings-text">
+        <div class="settings-label">Profil</div>
+        <div class="settings-sub">Ma'lumotlar va statistika</div>
+      </div>
+      <div class="settings-arrow">›</div>
+    </div>
+
+    <div class="settings-item" onclick="navTo('plans')">
+      <div class="settings-icon" style="background:rgba(245,158,11,0.1)">💰</div>
+      <div class="settings-text">
+        <div class="settings-label">Tariflar</div>
+        <div class="settings-sub">Obuna va to'lov</div>
+      </div>
+      <div class="settings-arrow">›</div>
+    </div>
+
+    <div class="settings-item" onclick="openModelModal()">
+      <div class="settings-icon" style="background:rgba(6,182,212,0.1)">🤖</div>
+      <div class="settings-text">
+        <div class="settings-label">AI Model</div>
+        <div class="settings-sub" id="settings-model">Llama 3.3 70B</div>
+      </div>
+      <div class="settings-arrow">›</div>
+    </div>
+
+    <div class="settings-item">
+      <div class="settings-icon" style="background:rgba(16,185,129,0.1)">🌓</div>
+      <div class="settings-text">
+        <div class="settings-label">Qorong'u rejim</div>
+        <div class="settings-sub">Doim yoqiq</div>
+      </div>
+      <div class="toggle on"></div>
+    </div>
+
+    <div class="settings-item" onclick="clearHistory()">
+      <div class="settings-icon" style="background:rgba(239,68,68,0.1)">🗑️</div>
+      <div class="settings-text">
+        <div class="settings-label">Tarixni tozalash</div>
+        <div class="settings-sub">Barcha suhbatlar o'chadi</div>
+      </div>
+      <div class="settings-arrow">›</div>
+    </div>
+
+    <div class="settings-item" onclick="contactAdmin()">
+      <div class="settings-icon" style="background:rgba(124,58,237,0.1)">💬</div>
+      <div class="settings-text">
+        <div class="settings-label">Admin bilan bog'lanish</div>
+        <div class="settings-sub">Yordam va savol</div>
+      </div>
+      <div class="settings-arrow">›</div>
+    </div>
+
+    <div class="card" style="margin-top:8px;text-align:center">
+      <div style="font-size:24px;margin-bottom:6px">✦</div>
+      <div style="font-size:14px;font-weight:700;color:var(--text)">Emerland AI</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">Version 2.0 • @temur_uzb7779</div>
+    </div>
+  </div>
+
+</div><!-- /pages -->
+
+<!-- NAVIGATION -->
+<div class="nav">
+  <div class="nav-item active" id="nav-chat" onclick="navTo('chat')">
+    <div class="nav-icon">💬</div>
+    <div class="nav-label">Chat</div>
+  </div>
+  <div class="nav-item" id="nav-history" onclick="navTo('history')">
+    <div class="nav-icon">📋</div>
+    <div class="nav-label">Tarix</div>
+  </div>
+  <div class="nav-item" id="nav-plans" onclick="navTo('plans')">
+    <div class="nav-icon">💰</div>
+    <div class="nav-label">Tariflar</div>
+  </div>
+  <div class="nav-item" id="nav-profile" onclick="navTo('profile')">
+    <div class="nav-icon">👤</div>
+    <div class="nav-label">Profil</div>
+  </div>
+  <div class="nav-item" id="nav-settings" onclick="navTo('settings')">
+    <div class="nav-icon">⚙️</div>
+    <div class="nav-label">Sozlamalar</div>
+  </div>
+</div>
+
+</div><!-- /app -->
+
+<!-- MODEL MODAL -->
+<div class="modal-overlay" id="model-modal" onclick="closeModelModal(event)">
+  <div class="modal">
+    <div class="modal-title">🤖 AI Model tanlang</div>
+    <div id="model-list"></div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════
+// TELEGRAM WEBAPP
+// ═══════════════════════════════
+const tg = window.Telegram?.WebApp;
+if(tg){
+  tg.ready();
+  tg.expand();
+  tg.setHeaderColor('#0a0a0f');
+  tg.setBackgroundColor('#0a0a0f');
+}
+
+// ═══════════════════════════════
+// STATE
+// ═══════════════════════════════
+const state = {
+  user: null,
+  currentPage: 'chat',
+  currentModel: 'llama-3.3-70b-versatile',
+  currentMode: 'text',
+  messages: [],
+  history: JSON.parse(localStorage.getItem('em_history') || '[]'),
+  isLoading: false,
+};
+
+const MODELS = [
+  {
+    id:'llama-3.3-70b-versatile',
+    name:'Llama 3.3 70B',
+    desc:'Tez va kuchli • Umumiy foydalanish',
+    icon:'🦙',
+    color:'#7c3aed',
+    badge:'free',
+    free:true
+  },
+  {
+    id:'llama-3.1-8b-instant',
+    name:'Llama 3.1 8B Instant',
+    desc:'Eng tez model • Oddiy savollar',
+    icon:'⚡',
+    color:'#06b6d4',
+    badge:'free',
+    free:true
+  },
+  {
+    id:'gemma2-9b-it',
+    name:'Gemma 2 9B',
+    desc:'Google modeli • Kod yozish',
+    icon:'💎',
+    color:'#10b981',
+    badge:'free',
+    free:true
+  },
+  {
+    id:'mixtral-8x7b-32768',
+    name:'Mixtral 8x7B',
+    desc:'Ko\'p tilli • Uzun kontekst',
+    icon:'🌀',
+    color:'#f59e0b',
+    badge:'free',
+    free:true
+  },
+  {
+    id:'llama-3.3-70b-specdec',
+    name:'Llama 3.3 70B Specdec',
+    desc:'Tezlashtirilgan • Premium',
+    icon:'🚀',
+    color:'#8b5cf6',
+    badge:'pro',
+    free:false
+  },
+  {
+    id:'llama-3.2-90b-vision-preview',
+    name:'Llama 3.2 90B Vision',
+    desc:'Rasm ko\'ra oladi • Premium',
+    icon:'👁️',
+    color:'#ec4899',
+    badge:'pro',
+    free:false
+  },
+];
+
+const MODE_PROMPTS = {
+  text: '',
+  image: 'Quyidagi matn asosida batafsil rasm yaratish uchun inglizcha prompt yaz: ',
+  translate: 'Quyidagi matnni eng yaxshi tarjima qilib ber, til avtomatik aniqlansin: ',
+  code: 'Quyidagi vazifa uchun toza, izohli, professional kod yoz va tushuntir: ',
+  email: 'Quyidagi mavzu bo\'yicha professional biznes email yoz (mavzu qatori, salomlashish, kontent, xotima bilan): ',
+  cv: 'Quyidagi ma\'lumotlar asosida professional ATS-friendly CV yoz (Xulosa, Tajriba, Ko\'nikmalar, Ta\'lim, Yutuqlar): ',
+};
+
+// ═══════════════════════════════
+// INIT
+// ═══════════════════════════════
+async function init(){
+  loadUserData();
+  renderModels();
+  renderHistory();
+  updateModelUI();
+}
+
+function loadUserData(){
+  const u = tg?.initDataUnsafe?.user;
+  if(u){
+    state.user = u;
+    document.getElementById('user-name').textContent = u.first_name + (u.last_name ? ' '+u.last_name : '');
+    const avatar = u.first_name?.[0]?.toUpperCase() || '👤';
+    document.getElementById('user-avatar').textContent = avatar;
+  }
+  // Load saved stats from localStorage
+  const saved = JSON.parse(localStorage.getItem('em_stats') || '{}');
+  document.getElementById('stat-coins').textContent = (saved.coins||0).toLocaleString();
+  document.getElementById('stat-msgs').textContent = (saved.messages||0).toLocaleString();
+  document.getElementById('stat-refs').textContent = saved.referrals||0;
+  document.getElementById('stat-streak').textContent = saved.streak||0;
+  document.getElementById('coin-banner-amount').textContent = (saved.coins||0).toLocaleString()+' coin';
+  document.getElementById('header-plan').textContent = saved.plan||'Bepul tarif';
+  document.getElementById('user-plan-badge').textContent = getPlanBadge(saved.plan||'free');
+
+  // Referral link
+  const botUsername = 'emerland_ai_bot';
+  const refCode = saved.refCode || 'REF'+Math.random().toString(36).substr(2,8).toUpperCase();
+  document.getElementById('ref-link').textContent = `https://t.me/${botUsername}?start=${refCode}`;
+
+  // Usage bars
+  const chatMax = saved.plan==='premium'?'∞':(saved.plan==='standard'?30:20);
+  const chatUsed = saved.usage_chat||0;
+  document.getElementById('chat-usage').textContent = `${chatUsed}/${chatMax}`;
+  if(typeof chatMax==='number') document.getElementById('chat-bar').style.width = Math.min(100,chatUsed/chatMax*100)+'%';
+  else document.getElementById('chat-bar').style.width = '100%';
+}
+
+function getPlanBadge(plan){
+  return {free:'🆓 BEPUL',standard:'⭐ STANDART',premium:'💎 PREMIUM',admin:'👑 ADMIN'}[plan]||'🆓 BEPUL';
+}
+
+// ═══════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════
+function navTo(page){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById(page+'-page').classList.add('active');
+  document.getElementById('nav-'+page)?.classList.add('active');
+  state.currentPage = page;
+}
+
+// ═══════════════════════════════
+// CHAT
+// ═══════════════════════════════
+function setMode(mode){
+  state.currentMode = mode;
+  document.querySelectorAll('.tool-chip').forEach(c=>c.classList.remove('active'));
+  event?.target?.classList.add('active');
+  const placeholders = {
+    text:'Xabar yozing...',
+    image:'Rasm tavsifi (masalan: tog\' ustida quyosh botishi)...',
+    translate:'Tarjima qilinadigan matn...',
+    code:'Kod vazifasini yozing...',
+    email:'Email mavzusini yozing...',
+    cv:'Kasbingiz va tajribangizni yozing...',
+  };
+  document.getElementById('msg-input').placeholder = placeholders[mode]||'Xabar yozing...';
+}
+
+function sendSuggestion(text){
+  document.getElementById('msg-input').value = text;
+  sendMessage();
+}
+
+async function sendMessage(){
+  if(state.isLoading) return;
+  const input = document.getElementById('msg-input');
+  const text = input.value.trim();
+  if(!text) return;
+  input.value = '';
+  input.style.height = 'auto';
+  hideWelcome();
+  appendMsg('user', text);
+  state.messages.push({role:'user',content:text});
+  setLoading(true);
+  showTyping();
+  try{
+    const prompt = MODE_PROMPTS[state.currentMode] + text;
+    const reply = await callAI(prompt);
+    removeTyping();
+    appendMsg('ai', reply);
+    state.messages.push({role:'assistant',content:reply});
+    saveToHistory(text, reply);
+    // Update coin count
+    const saved = JSON.parse(localStorage.getItem('em_stats')||'{}');
+    saved.coins = (saved.coins||0)+5;
+    saved.messages = (saved.messages||0)+1;
+    localStorage.setItem('em_stats', JSON.stringify(saved));
+    document.getElementById('stat-coins').textContent = saved.coins.toLocaleString();
+  }catch(e){
+    removeTyping();
+    appendMsg('ai', '❌ Xato yuz berdi: '+e.message);
+  }
+  setLoading(false);
+}
+
+async function callAI(text){
+  const GROQ_KEY = 'YOUR_GROQ_API_KEY'; // Bu serverda saqlanishi kerak!
+  // Mini App dan to'g'ridan API chaqirib bo'lmaydi (CORS), 
+  // shuning uchun Telegram bot orqali ishlaymiz
+  // Demo uchun mock response:
+  const responses = [
+    `Siz yozgan: "${text}"\n\nBu savolga javob beraman. Mini App to'liq ishlashi uchun backend API kerak. Bot orqali yuborish tavsiya etiladi.`,
+    `✦ **Emerland AI**\n\nSavol qabul qilindi. Backend serverga ulanish uchun bot API ni sozlang.`,
+    `Rahmat! "${text.substring(0,50)}..." savolingizni qabul qildim. Real ishlash uchun Groq API orqali ulaning.`
+  ];
+  await new Promise(r=>setTimeout(r, 800+Math.random()*600));
+  return responses[Math.floor(Math.random()*responses.length)];
+}
+
+function appendMsg(role, content){
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'message '+role;
+  if(role==='ai'){
+    div.innerHTML = `<div class="msg-header"><div class="ai-avatar">✦</div><div class="ai-name">Emerland AI</div></div>${escapeHtml(content).replace(/\n/g,'<br>')}`;
+  }else{
+    div.textContent = content;
+  }
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function showTyping(){
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'typing-indicator';
+  div.id = 'typing';
+  div.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function removeTyping(){
+  document.getElementById('typing')?.remove();
+}
+
+function hideWelcome(){
+  const w = document.getElementById('welcome-area');
+  if(w) w.style.display='none';
+}
+
+function setLoading(v){
+  state.isLoading = v;
+  document.getElementById('send-btn').disabled = v;
+}
+
+function newChat(){
+  state.messages = [];
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = `<div class="welcome-msg" id="welcome-area">
+    <div class="welcome-icon">✦</div>
+    <div class="welcome-title">Emerland AI</div>
+    <div class="welcome-sub">Professional AI yordamchingiz. Qanday yordam kerak?</div>
+    <div class="suggestions">
+      <div class="suggestion" onclick="sendSuggestion('Menga kod yozib ber: Python bilan saralash algoritmini tushuntir')">💻 Kod yozib ber</div>
+      <div class="suggestion" onclick="sendSuggestion('Sun\\'iy intellekt haqida keng ma\\'lumot ber')">🤖 AI haqida so'ra</div>
+      <div class="suggestion" onclick="sendSuggestion('Ingliz tilini o\\'rganishga yordam ber')">🌐 Til o'rganish</div>
+      <div class="suggestion" onclick="sendSuggestion('Bugungi ish rejamni tuzib ber')">📋 Ish rejasi</div>
+    </div>
+  </div>`;
+  showToast('✅ Yangi suhbat boshlandi');
+}
+
+function handleKey(e){
+  if(e.key==='Enter' && !e.shiftKey){
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function autoResize(el){
+  el.style.height='auto';
+  el.style.height=Math.min(el.scrollHeight,120)+'px';
+}
+
+// ═══════════════════════════════
+// HISTORY
+// ═══════════════════════════════
+function saveToHistory(question, answer){
+  const item = {
+    id: Date.now(),
+    title: question.substring(0,50)+(question.length>50?'...':''),
+    preview: answer.substring(0,80)+(answer.length>80?'...':''),
+    date: new Date().toLocaleDateString('uz-UZ'),
+    messages: [...state.messages]
+  };
+  state.history.unshift(item);
+  if(state.history.length>50) state.history.pop();
+  localStorage.setItem('em_history', JSON.stringify(state.history));
+  renderHistory();
+}
+
+function renderHistory(){
+  const list = document.getElementById('history-list');
+  if(!state.history.length){
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">💬</div><div class="empty-text">Hali suhbat yo'q.<br>Birinchi suhbatingizni boshlang!</div></div>`;
+    return;
+  }
+  list.innerHTML = state.history.map((h,i)=>`
+    <div class="history-item" onclick="loadHistory(${i})" style="margin-bottom:8px">
+      <div class="history-title">${escapeHtml(h.title)}</div>
+      <div class="history-preview">${escapeHtml(h.preview)}</div>
+      <div class="history-date">${h.date}</div>
+    </div>
+  `).join('');
+}
+
+function loadHistory(i){
+  const h = state.history[i];
+  if(!h) return;
+  state.messages = h.messages||[];
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML='';
+  state.messages.forEach(m=>appendMsg(m.role,m.content));
+  navTo('chat');
+}
+
+function clearHistory(){
+  if(confirm('Barcha suhbat tarixi o\'chadi?')){
+    state.history=[];
+    localStorage.removeItem('em_history');
+    renderHistory();
+    showToast('🗑️ Tarix tozalandi');
+  }
+}
+
+// ═══════════════════════════════
+// MODELS
+// ═══════════════════════════════
+function renderModels(){
+  const list = document.getElementById('model-list');
+  list.innerHTML = MODELS.map(m=>`
+    <div class="modal-item ${state.currentModel===m.id?'selected':''}" onclick="selectModel('${m.id}')">
+      <div class="modal-icon" style="background:${m.color}22">${m.icon}</div>
+      <div class="modal-info">
+        <div class="modal-name">${m.name}</div>
+        <div class="modal-desc">${m.desc}</div>
+      </div>
+      <span class="modal-badge badge-${m.badge}">${m.badge==='free'?'Bepul':'Premium'}</span>
+      ${state.currentModel===m.id?'<div class="modal-check">✓</div>':''}
+    </div>
+  `).join('');
+}
+
+function selectModel(id){
+  const model = MODELS.find(m=>m.id===id);
+  if(!model) return;
+  if(!model.free){
+    const saved=JSON.parse(localStorage.getItem('em_stats')||'{}');
+    if(saved.plan!=='premium'){
+      closeModelModal();
+      showToast('💎 Bu model Premium talab qiladi!');
+      setTimeout(()=>navTo('plans'),800);
+      return;
+    }
+  }
+  state.currentModel = id;
+  updateModelUI();
+  closeModelModal();
+  showToast('✅ Model: '+model.name);
+}
+
+function updateModelUI(){
+  const model = MODELS.find(m=>m.id===state.currentModel);
+  if(!model) return;
+  document.getElementById('current-model-name').textContent = model.name;
+  document.getElementById('settings-model').textContent = model.name;
+  const dot = document.getElementById('model-dot');
+  dot.style.background = model.free?'var(--green)':'var(--primary3)';
+  dot.style.boxShadow = `0 0 6px ${model.free?'var(--green)':'var(--primary3)'}`;
+}
+
+function openModelModal(){
+  renderModels();
+  document.getElementById('model-modal').classList.add('show');
+}
+
+function closeModelModal(e){
+  if(!e || e.target.id==='model-modal'){
+    document.getElementById('model-modal').classList.remove('show');
+  }
+}
+
+// ═══════════════════════════════
+// PLANS & PAYMENT
+// ═══════════════════════════════
+function buyPlan(type){
+  if(tg){
+    const msgs = {
+      standard:'Standart tarif: 10$ yoki 770⭐\n\nTo\'lov uchun admin bilan bog\'laning: @temur_uzb7779',
+      premium:'Premium tarif: 15$ yoki 1150⭐\n\nTo\'lov uchun admin bilan bog\'laning: @temur_uzb7779',
+      group:'Guruh rejimi: 8547⭐ ($111.11)\n\nTo\'lov uchun admin bilan bog\'laning: @temur_uzb7779',
+    };
+    tg.showPopup({
+      title:'💰 Tarif sotib olish',
+      message:msgs[type]||'',
+      buttons:[
+        {id:'admin',type:'default',text:'💬 Admin bilan bog\'lanish'},
+        {id:'cancel',type:'cancel',text:'Bekor qilish'}
+      ]
+    },(btn)=>{
+      if(btn==='admin') tg.openTelegramLink('https://t.me/temur_uzb7779');
+    });
+  }else{
+    showToast('💬 @temur_uzb7779 bilan bog\'laning');
+  }
+}
+
+// ═══════════════════════════════
+// REFERRAL
+// ═══════════════════════════════
+function copyRefLink(){
+  const link = document.getElementById('ref-link').textContent;
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(link).then(()=>showToast('📋 Nusxa olindi!'));
+  }else{
+    showToast('📋 Nusxa olindi!');
+  }
+}
+
+function shareRef(){
+  const link = document.getElementById('ref-link').textContent;
+  if(tg){
+    tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent('Emerland AI — Professional AI yordamchi!')}`);
+  }else{
+    copyRefLink();
+  }
+}
+
+// ═══════════════════════════════
+// SETTINGS
+// ═══════════════════════════════
+function contactAdmin(){
+  if(tg) tg.openTelegramLink('https://t.me/temur_uzb7779');
+  else showToast('💬 @temur_uzb7779');
+}
+
+// ═══════════════════════════════
+// UTILS
+// ═══════════════════════════════
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+function escapeHtml(str){
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ═══════════════════════════════
+// START
+// ═══════════════════════════════
+init();
+</script>
+</body>
+</html>
