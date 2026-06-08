@@ -21,7 +21,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = (
         f"✨ Salom, *{name}*\\!\n\n"
         "🤖 *Emerland AI* — Professional AI yordamchingiz\\!\n\n"
-        "📌 *Nimalар qila olaman:*\n\n"
+        "📌 *Nimalаr qila olaman:*\n\n"
         "💬 AI Suhbat — Istalgan savolga javob\n"
         "🎨 AI Rasm — So'zdan rasm yaratish\n"
         "🌐 Tarjima — 100\\+ til\n"
